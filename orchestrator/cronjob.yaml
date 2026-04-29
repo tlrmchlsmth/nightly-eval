@@ -1,0 +1,74 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: nightly-eval
+  namespace: vllm
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 10800
+      backoffLimit: 0
+      template:
+        spec:
+          serviceAccountName: nightly-eval-orchestrator
+          restartPolicy: Never
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: ["amd64"]
+          containers:
+            - name: orchestrator
+              image: ${ORCHESTRATOR_IMAGE}
+              imagePullPolicy: Always
+              command: ["/bin/bash", "/workspace/nightly-eval/orchestrator/run-nightly.sh"]
+              env:
+                - name: VLLM_IMAGE
+                  value: "vllm/vllm-openai:nightly"
+                - name: NAMESPACE
+                  value: "vllm"
+                - name: NIGHTLY_DIR
+                  value: "/workspace/nightly-eval"
+                - name: LUSTRE_PREFIX
+                  value: "/mnt/lustre/nightly"
+                - name: HF_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: hf-secret
+                      key: HF_TOKEN
+                      optional: true
+              resources:
+                requests:
+                  cpu: "2"
+                  memory: "4Gi"
+                limits:
+                  cpu: "4"
+                  memory: "8Gi"
+              volumeMounts:
+                - name: lustre
+                  mountPath: /mnt/lustre
+                - name: workspace
+                  mountPath: /workspace
+          volumes:
+            - name: lustre
+              persistentVolumeClaim:
+                claimName: lustre-pvc-vllm
+            - name: workspace
+              emptyDir: {}
+          initContainers:
+            - name: clone-repo
+              image: alpine/git:latest
+              command: ["sh", "-c"]
+              args:
+                - |
+                  git clone --depth=1 https://github.com/YOUR_ORG/gb200_nightly.git /workspace
+              volumeMounts:
+                - name: workspace
+                  mountPath: /workspace

@@ -1,0 +1,16 @@
+name: ep32-tp1
+description: "Baseline WideEP: EP32 decode (8 pods × 4 GPUs), TP1, P/D disaggregated"
+mode: pd
+decode:
+  lws_size: 8
+  tp_size: 1
+  max_tokens: 1024
+  extra_args: ""
+prefill:
+  replicas: 2
+  tp_size: 1
+sweep:
+  min: 128
+  max: 2048
+  steps: 5
+  step_duration: "45s"

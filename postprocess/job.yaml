@@ -1,0 +1,45 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nightly-postprocess
+  namespace: vllm
+  labels:
+    app: nightly-postprocess
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/arch
+                operator: In
+                values: ["amd64"]
+      containers:
+        - name: postprocess
+          image: ${POSTPROCESS_IMAGE}
+          command: ["sh", "-c"]
+          args:
+            - |
+              python3 /app/pareto.py "${RUN_DIR}"
+              python3 /app/regression.py "${RUN_DIR}"
+          env:
+            - name: RUN_DIR
+              value: "${RUN_DIR}"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+          volumeMounts:
+            - name: lustre
+              mountPath: /mnt/lustre
+      volumes:
+        - name: lustre
+          persistentVolumeClaim:
+            claimName: lustre-pvc-vllm

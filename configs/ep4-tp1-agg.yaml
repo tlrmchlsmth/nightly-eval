@@ -1,0 +1,16 @@
+name: ep4-tp1-agg
+description: "Minimal aggregated: EP4 (1 pod × 4 GPUs), TP1, no P/D"
+mode: agg
+decode:
+  lws_size: 1
+  tp_size: 1
+  max_tokens: 512
+  extra_args: ""
+prefill:
+  replicas: 0
+  tp_size: 1
+sweep:
+  min: 4
+  max: 64
+  steps: 4
+  step_duration: "45s"

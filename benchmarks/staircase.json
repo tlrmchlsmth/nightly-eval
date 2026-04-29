@@ -1,0 +1,19 @@
+{
+  "warmup": {
+    "duration": "15s",
+    "stagger": true
+  },
+  "sweep": {
+    "min": 128,
+    "max": 2048,
+    "steps": 5,
+    "step_duration": "45s"
+  },
+  "workload": {
+    "type": "corpus",
+    "isl": 500,
+    "osl": 1500,
+    "turns": 1,
+    "corpus_path": "/mnt/lustre/nightly/corpus/sharegpt.txt"
+  }
+}

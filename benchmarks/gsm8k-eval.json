@@ -1,0 +1,18 @@
+{
+  "warmup": {
+    "duration": "15s",
+    "stagger": true
+  },
+  "load": {
+    "concurrency": 256,
+    "duration": "90s"
+  },
+  "workload": {
+    "type": "gsm8k",
+    "isl": 2048,
+    "osl": 1024,
+    "gsm8k_path": "/mnt/lustre/nightly/gsm8k_test.jsonl",
+    "gsm8k_train_path": "/mnt/lustre/nightly/gsm8k_train.jsonl",
+    "num_fewshot": 5
+  }
+}

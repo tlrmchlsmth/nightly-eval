@@ -1,0 +1,81 @@
+inferenceExtension:
+  replicas: 1
+  image:
+    name: llm-d-inference-scheduler
+    hub: ghcr.io/llm-d
+    tag: v0.5.0
+  extProcPort: 9002
+  monitoring:
+    interval: "10s"
+    secret:
+      name: ${DEPLOY_NAME}-sa-metrics-reader-secret
+    prometheus:
+      enabled: false
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: kubernetes.io/arch
+            operator: In
+            values: ["amd64"]
+  resources:
+    requests:
+      cpu: "8"
+      memory: 16Gi
+    limits:
+      cpu: "8"
+      memory: 16Gi
+  pluginsConfigFile: "custom-plugins.yaml"
+  pluginsCustomConfig:
+    custom-plugins.yaml: |
+      apiVersion: inference.networking.x-k8s.io/v1alpha1
+      kind: EndpointPickerConfig
+      plugins:
+      - type: data-parallel-profile-handler
+        parameters:
+          primaryPort: 8000
+      - type: active-request-scorer
+      - type: weighted-random-picker
+        parameters:
+          threshold: 0.1
+      schedulingProfiles:
+      - name: default
+        plugins:
+        - pluginRef: active-request-scorer
+          weight: 1
+        - pluginRef: weighted-random-picker
+
+inferencePool:
+  name: ${DEPLOY_NAME}-infpool
+  targetPorts:
+    - number: 8000
+    - number: 8001
+    - number: 8002
+    - number: 8003
+  modelServers:
+    matchLabels:
+      llm-d.ai/inferenceServing: "true"
+      llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+      llm-d.ai/deployment: agg
+      llm-d.ai/owner: ${OWNER}
+
+provider:
+  name: istio
+  istio:
+    destinationRule:
+      host: ${DEPLOY_NAME}-infpool-epp
+      trafficPolicy:
+        tls:
+          mode: SIMPLE
+          insecureSkipVerify: true
+        connectionPool:
+          http:
+            http1MaxPendingRequests: 256000
+            maxRequestsPerConnection: 256000
+            http2MaxRequests: 256000
+            idleTimeout: "900s"
+          tcp:
+            maxConnections: 256000
+            maxConnectionDuration: "1800s"
+            connectTimeout: "900s"
