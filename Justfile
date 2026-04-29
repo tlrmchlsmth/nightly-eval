@@ -169,7 +169,7 @@ bench-staircase CONFIG_FILE RUN_DIR:
   just deploy "nightly-${CONFIG_NAME}-staircase" "$BASE_URL" \
     "$BENCH_CONFIG" \
     8 {{NAMESPACE}} arm64 lustre latest
-  echo "Staircase job submitted: nightly-${CONFIG_NAME}-staircase (c=$SWEEP_MIN→$SWEEP_MAX, $SWEEP_STEPS steps)"
+  echo "Staircase job submitted: nightly-${CONFIG_NAME}-staircase (c=${SWEEP_MIN}-${SWEEP_MAX}, ${SWEEP_STEPS} steps)"
   {{KN}} wait --for=condition=Complete "job/nightly-${CONFIG_NAME}-staircase" --timeout=600s
   just collect "nightly-${CONFIG_NAME}-staircase" > "$OUTPUT_DIR/summary.json" 2>/dev/null || true
 
@@ -244,8 +244,8 @@ run-all:
     fi
     CONFIG_END=$(date -Iseconds)
     jq --arg name "$CONFIG_NAME" --arg mode "$MODE" --argjson gpus "$NUM_GPUS" \
-       --arg start "$CONFIG_START" --arg end "$CONFIG_END" \
-       ".configs += [{name: \$name, mode: \$mode, num_gpus: \$gpus, start: \$start, end: \$end}]" \
+       --arg start "$CONFIG_START" --arg xend "$CONFIG_END" \
+       '.configs += [{name: $name, mode: $mode, num_gpus: $gpus, start: $start, "end": $xend}]' \
        "$RUN_DIR/metadata.json" > "$RUN_DIR/metadata.tmp" && mv "$RUN_DIR/metadata.tmp" "$RUN_DIR/metadata.json"
 
     # Teardown
@@ -255,8 +255,8 @@ run-all:
   done
 
   # Finalize metadata
-  jq --arg end "$(date -Iseconds)" --argjson failed "$FAILED" \
-     ". + {end: \$end, failed: \$failed}" \
+  jq --arg xend "$(date -Iseconds)" --argjson failed "$FAILED" \
+     '. + {"end": $xend, failed: $failed}' \
      "$RUN_DIR/metadata.json" > "$RUN_DIR/metadata.tmp" && mv "$RUN_DIR/metadata.tmp" "$RUN_DIR/metadata.json"
 
   echo ""
