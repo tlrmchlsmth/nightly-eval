@@ -12,7 +12,7 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-vllm}"
 DEPLOY_NAME="${DEPLOY_NAME:-nightly-wide-ep}"
 OWNER="${OWNER:-nightly}"
-VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:nightly}"
+VLLM_IMAGE="${VLLM_IMAGE:-ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091}"
 LUSTRE_PREFIX="${LUSTRE_PREFIX:-/mnt/lustre/nightly}"
 NIGHTLY_DIR="${NIGHTLY_DIR:-.}"
 NYANN_BENCH_DIR="${NYANN_BENCH_DIR:-../nyann-bench}"
@@ -64,6 +64,14 @@ deploy_serving() {
   yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.size) = $decode_lws_size" "$rendered"
   yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"TP_SIZE\") | .value) = \"$decode_tp_size\"" "$rendered"
   yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"MAX_TOKENS\") | .value) = \"$decode_max_tokens\"" "$rendered"
+
+  # Agg mode: strip --kv_transfer_config from vllm serve command (no KV transfer in agg)
+  # and set empty env vars to satisfy set -u in the entrypoint script
+  if [ "$mode" = "agg" ]; then
+    yq -i '(select(.kind == "LeaderWorkerSet" and (.metadata.name | test("decode"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].args[0]) |= sub(" *--kv_transfer_config[^\n]*\n"; "")' "$rendered"
+    yq -i '(select(.kind == "LeaderWorkerSet" and (.metadata.name | test("decode"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env) += [{"name": "KV_TRANSFER_CONFIG", "value": ""}]' "$rendered"
+    yq -i '(select(.kind == "LeaderWorkerSet" and (.metadata.name | test("decode"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env) += [{"name": "VLLM_NIXL_SIDE_CHANNEL_HOST", "value": ""}]' "$rendered"
+  fi
 
   # Prefill LWS overrides (pd mode only)
   if [ "$mode" = "pd" ]; then
