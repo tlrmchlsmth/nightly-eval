@@ -1,14 +1,12 @@
 inferenceExtension:
   replicas: 1
   image:
-    name: llm-d-inference-scheduler
-    hub: ghcr.io/llm-d
-    tag: v0.5.0
+    registry: ghcr.io
+    repository: llm-d/llm-d-inference-scheduler
+    tag: v0.8.0
   extProcPort: 9002
   monitoring:
     interval: "10s"
-    secret:
-      name: ${DEPLOY_NAME}-sa-metrics-reader-secret
     prometheus:
       enabled: false
   affinity:
@@ -26,25 +24,6 @@ inferenceExtension:
     limits:
       cpu: "8"
       memory: 16Gi
-  pluginsConfigFile: "custom-plugins.yaml"
-  pluginsCustomConfig:
-    custom-plugins.yaml: |
-      apiVersion: inference.networking.x-k8s.io/v1alpha1
-      kind: EndpointPickerConfig
-      plugins:
-      - type: data-parallel-profile-handler
-        parameters:
-          primaryPort: 8000
-      - type: active-request-scorer
-      - type: weighted-random-picker
-        parameters:
-          threshold: 0.1
-      schedulingProfiles:
-      - name: default
-        plugins:
-        - pluginRef: active-request-scorer
-          weight: 1
-        - pluginRef: weighted-random-picker
 
 inferencePool:
   name: ${DEPLOY_NAME}-infpool
@@ -67,8 +46,8 @@ provider:
       host: ${DEPLOY_NAME}-infpool-epp
       trafficPolicy:
         tls:
-          mode: SIMPLE
           insecureSkipVerify: true
+          mode: SIMPLE
         connectionPool:
           http:
             http1MaxPendingRequests: 256000

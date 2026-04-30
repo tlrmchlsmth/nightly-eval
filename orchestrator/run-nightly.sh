@@ -19,7 +19,7 @@ NYANN_BENCH_DIR="${NYANN_BENCH_DIR:-../nyann-bench}"
 LLMD_DIR="${LLMD_DIR:-../j-llm-d}"
 
 INFPOOL_CHART="oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool"
-INFPOOL_VERSION="v1.3.0"
+INFPOOL_VERSION="v1.5.0"
 NYANN_BENCH_IMAGE="${NYANN_BENCH_IMAGE:-ghcr.io/neuralmagic/nyann-bench:latest}"
 BENCH_ARCH="${BENCH_ARCH:-arm64}"
 

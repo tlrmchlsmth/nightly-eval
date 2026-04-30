@@ -90,7 +90,7 @@ deploy CONFIG_FILE:
   envsubst '${DEPLOY_NAME} ${OWNER}' < "{{SERVING_DIR}}/inferencepool-${MODE}.values.yaml" > /tmp/nightly-infpool-values.yaml
   helm upgrade --install {{DEPLOY_NAME}}-infpool \
     oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool \
-    --version v1.3.0 \
+    --version v1.5.0 \
     -f /tmp/nightly-infpool-values.yaml \
     -n {{NAMESPACE}}
   {{KN}} delete pod -l inferencepool={{DEPLOY_NAME}}-infpool-epp --ignore-not-found=true
