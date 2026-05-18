@@ -1,0 +1,16 @@
+# DestinationRule for the InferencePool backend service (infpool-ip-*).
+# The Helm chart only creates a DR for the EPP service; without this,
+# the backend cluster gets Istio defaults (unlimited everything, no idle
+# timeout), causing envoy to accumulate stale connections and OOM.
+apiVersion: networking.istio.io/v1
+kind: DestinationRule
+metadata:
+  name: ${DEPLOY_NAME}-infpool-backend
+spec:
+  host: ${INFPOOL_IP_SVC}
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 256000
+      http:
+        idleTimeout: 300s

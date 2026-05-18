@@ -67,8 +67,8 @@ spec:
               image: alpine/git:latest
               command: ["sh", "-c"]
               args:
-                - |
-                  git clone --depth=1 https://github.com/YOUR_ORG/gb200_nightly.git /workspace
+                # TODO: set your repo URL
+                - git clone --depth=1 https://github.com/YOUR_ORG/gb200_nightly.git /workspace
               volumeMounts:
                 - name: workspace
                   mountPath: /workspace

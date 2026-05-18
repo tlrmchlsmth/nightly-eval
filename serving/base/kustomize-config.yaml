@@ -1,0 +1,6 @@
+nameReference:
+- kind: ServiceAccount
+  fieldSpecs:
+  - kind: LeaderWorkerSet
+    group: leaderworkerset.x-k8s.io
+    path: spec/leaderWorkerTemplate/workerTemplate/spec/serviceAccountName

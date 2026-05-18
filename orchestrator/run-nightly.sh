@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Self-contained nightly eval orchestrator.
-# Runs entirely in-cluster via CronJob — no client, no Justfile dependency.
+# Runs entirely in-cluster via CronJob — no external repo dependencies.
 #
 # Loops over config YAMLs, deploying each serving config, running benchmarks,
 # and collecting results to Lustre.
@@ -15,12 +15,10 @@ OWNER="${OWNER:-nightly}"
 VLLM_IMAGE="${VLLM_IMAGE:-ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091}"
 LUSTRE_PREFIX="${LUSTRE_PREFIX:-/mnt/lustre/nightly}"
 NIGHTLY_DIR="${NIGHTLY_DIR:-.}"
-NYANN_BENCH_DIR="${NYANN_BENCH_DIR:-../nyann-bench}"
-LLMD_DIR="${LLMD_DIR:-../j-llm-d}"
 
 INFPOOL_CHART="oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool"
 INFPOOL_VERSION="v1.5.0"
-NYANN_BENCH_IMAGE="${NYANN_BENCH_IMAGE:-ghcr.io/neuralmagic/nyann-bench:latest}"
+NYANN_BENCH_IMAGE="${NYANN_BENCH_IMAGE:-ghcr.io/neuralmagic/nyann-bench:consolidate-workers-flag}"
 BENCH_ARCH="${BENCH_ARCH:-arm64}"
 
 KN="kubectl -n $NAMESPACE"
@@ -105,6 +103,21 @@ deploy_serving() {
     -n "$NAMESPACE"
   $KN delete pod -l "inferencepool=${DEPLOY_NAME}-infpool-epp" --ignore-not-found=true
 
+  # DestinationRule for infpool-ip service (prevents envoy connection OOM)
+  local infpool_ip_svc=""
+  for i in $(seq 1 30); do
+    infpool_ip_svc=$($KN get svc -l "istio.io/inferencepool-name=${DEPLOY_NAME}-infpool" \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null) && [ -n "$infpool_ip_svc" ] && break
+    log "Waiting for infpool-ip service... ($i/30)"
+    sleep 2
+  done
+  if [ -n "$infpool_ip_svc" ]; then
+    export INFPOOL_IP_SVC="$infpool_ip_svc"
+    envsubst '${DEPLOY_NAME} ${INFPOOL_IP_SVC}' < "$NIGHTLY_DIR/serving/infpool-backend-dr.yaml" | $KN apply -f -
+  else
+    log "WARNING: infpool-ip service not found -- skipping DestinationRule"
+  fi
+
   log "Deployed $config_name"
 }
 
@@ -128,21 +141,21 @@ wait_for_ready() {
   log "Serving stack ready."
 }
 
-# === Helper: Deploy a nyann-bench Job ===
-deploy_bench_job() {
+# === Helper: Run a nyann-bench Job via the CLI ===
+run_bench() {
   local job_name="$1" target="$2" config_json="$3" n_workers="$4"
 
-  # Clean up previous run
-  $KN delete job "$job_name" --ignore-not-found=true
-  $KN delete configmap "${job_name}-config" --ignore-not-found=true
-
-  # Create ConfigMap with benchmark config
-  $KN create configmap "${job_name}-config" --from-literal=config.json="$config_json"
-
-  # Render and apply the Job
-  export JOB_NAME="$job_name" N_WORKERS="$n_workers" TARGET="$target"
-  export IMAGE_TAG="${NYANN_BENCH_IMAGE##*:}" ARCH="$BENCH_ARCH" LOG_LEVEL="info"
-  kubectl kustomize "$NYANN_BENCH_DIR/deploy/overlays/lustre" | envsubst | $KN apply -f -
+  log "Deploying benchmark: $job_name (workers=$n_workers)"
+  nyann-bench generate \
+    --kube \
+    --kube.name "$job_name" \
+    --kube.namespace "$NAMESPACE" \
+    --kube.image "$NYANN_BENCH_IMAGE" \
+    --kube.arch "$BENCH_ARCH" \
+    --kube.volume lustre \
+    --workers "$n_workers" \
+    --target "$target" \
+    --config "$config_json"
 }
 
 # === Helper: Collect results from a completed Job ===
@@ -155,6 +168,13 @@ collect_results() {
   done
 }
 
+# === Helper: Clean up benchmark resources ===
+cleanup_bench() {
+  local job_name="$1"
+  $KN delete job "$job_name" --ignore-not-found=true
+  $KN delete service "$job_name" --ignore-not-found=true
+}
+
 # === Helper: Teardown serving stack ===
 teardown_serving() {
   log "Tearing down serving stack..."
@@ -163,6 +183,7 @@ teardown_serving() {
   helm uninstall "${DEPLOY_NAME}-infpool" -n "$NAMESPACE" 2>/dev/null || true &
   export DEPLOY_NAME
   envsubst '${DEPLOY_NAME}' < "$NIGHTLY_DIR/serving/gateway.yaml" | $KN delete -f - --ignore-not-found=true &
+  $KN delete destinationrule "${DEPLOY_NAME}-infpool-backend" --ignore-not-found=true &
   wait
   log "Teardown complete."
 }
@@ -187,10 +208,11 @@ run_staircase() {
   local output_dir="$run_dir/$config_name/staircase"
   mkdir -p "$output_dir"
 
-  log "Staircase: $job_name (c=$sweep_min→$sweep_max, $sweep_steps steps)"
-  deploy_bench_job "$job_name" "$base_url" "$bench_config" 8
+  log "Staircase: $job_name (c=$sweep_min-$sweep_max, $sweep_steps steps)"
+  run_bench "$job_name" "$base_url" "$bench_config" 8
   $KN wait --for=condition=Complete "job/$job_name" --timeout=600s
   collect_results "$job_name" > "$output_dir/summary.json" 2>/dev/null || true
+  cleanup_bench "$job_name"
 }
 
 # === Helper: Run GSM8K eval ===
@@ -207,9 +229,10 @@ run_gsm8k() {
   mkdir -p "$output_dir"
 
   log "GSM8K eval: $job_name"
-  deploy_bench_job "$job_name" "$base_url" "$gsm8k_config" 1
+  run_bench "$job_name" "$base_url" "$gsm8k_config" 1
   $KN wait --for=condition=Complete "job/$job_name" --timeout=300s
   collect_results "$job_name" > "$output_dir/summary.json" 2>/dev/null || true
+  cleanup_bench "$job_name"
 }
 
 # ===========================================================================

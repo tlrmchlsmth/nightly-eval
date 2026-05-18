@@ -1,0 +1,261 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: wide-ep-prefill
+  labels:
+    llm-d.ai/inferenceServing: "true"
+    llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+    llm-d.ai/role: prefill
+spec:
+  replicas: 2
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxUnavailable: 100%
+  leaderWorkerTemplate:
+    size: 1
+    workerTemplate:
+      metadata:
+        labels:
+          llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
+          llm-d.ai/inferenceServing: "true"
+          llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+          llm-d.ai/owner: OWNER_PLACEHOLDER
+          llm-d.ai/role: prefill
+      spec:
+        serviceAccountName: wide-ep
+        terminationGracePeriodSeconds: 0
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 2Gi
+          - name: lustre
+            persistentVolumeClaim:
+              claimName: lustre-pvc-vllm
+          - name: local-nvme
+            hostPath:
+              path: /mnt/numa0
+              type: Directory
+        resourceClaims:
+          - name: compute-domain-channel
+            resourceClaimTemplateName: llm-d-dev-claim
+        containers:
+          - name: vllm
+            image: VLLM_IMAGE_PLACEHOLDER
+            securityContext:
+              capabilities:
+                add:
+                  - IPC_LOCK
+                  - SYS_RAWIO
+              runAsGroup: 0
+              runAsUser: 0
+            imagePullPolicy: Always
+            command:
+              - /bin/bash
+              - -c
+            args:
+              - |-
+                set -euo pipefail
+                # Persist logs to Lustre so they survive LWS pod recreation
+                LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/prefill
+                mkdir -p "$LOG_DIR"
+                LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+                exec > >(tee -a "$LOG_FILE") 2>&1
+                echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+
+                FORK_REPO="FORK_REPO_PLACEHOLDER"
+                FORK_BRANCH="FORK_BRANCH_PLACEHOLDER"
+                if [ -n "$FORK_BRANCH" ]; then
+                  cd /opt/vllm-source
+                  git remote add fork "$FORK_REPO" 2>/dev/null || git remote set-url fork "$FORK_REPO"
+                  git fetch fork "$FORK_BRANCH"
+                  git checkout "fork/$FORK_BRANCH"
+                  echo "=== Checked out fork/$FORK_BRANCH at $(date) ==="
+                  cd -
+                fi
+
+                # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
+                if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
+                  echo "Using dev venv at ${VLLM_DEV_VENV}"
+                  source "${VLLM_DEV_VENV}/bin/activate"
+                else
+                  source /opt/vllm/bin/activate
+                fi
+
+                uv pip install --upgrade mistral_common
+
+                DP_SIZE_LOCAL=$((4 / TP_SIZE))
+                DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))
+                START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
+
+                # Build DP flags only when there are multiple DP ranks
+                DP_FLAGS=""
+                if [ $DP_SIZE -gt 1 ]; then
+                  DP_FLAGS="--data-parallel-size $DP_SIZE \
+                    --data-parallel-size-local 1 \
+                    --data-parallel-address ${LWS_LEADER_ADDRESS} \
+                    --data-parallel-rpc-port 5555"
+                fi
+
+                for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
+                  GPU_START=$((R * TP_SIZE))
+                  GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
+
+                  RANK_FLAGS=""
+                  if [ $DP_SIZE -gt 1 ]; then
+                    RANK_FLAGS="--data-parallel-rank $((START_RANK + R))"
+                  fi
+
+                  VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
+                  FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
+                  CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
+                    nvidia/DeepSeek-R1-0528-NVFP4-v2 \
+                    --disable-uvicorn-access-log \
+                    --port $((8000 + R)) \
+                    --tensor-parallel-size $TP_SIZE \
+                    --enable-expert-parallel \
+                    $DP_FLAGS $RANK_FLAGS \
+                    --trust-remote-code \
+                    --kv_transfer_config "$KV_TRANSFER_CONFIG" \
+                    --gpu-memory-utilization 0.85 \
+                    --all2all-backend "flashinfer_nvlink_one_sided" \
+                    --disable_cascade_attn \
+                    --api-server-count 4 \
+                    --async-scheduling \
+                    --kv-cache-dtype fp8 \
+                    --enable-force-include-usage &
+                done
+
+                    #--all2all-backend "deepep_high_throughput" \
+                    # --attention_backend "CUTLASS_MLA" \
+                    #--profiler-config '{"profiler": "torch",
+                    #                    "torch_profiler_dir": "/traces",
+                    #                    "ignore_frontend": "true",
+                    #                    "delay_iterations": 5,
+                    #                    "max_iterations": 3}' \
+
+                # If any process exits, kill all and restart pod
+                wait -n
+                kill $(jobs -p) 2>/dev/null
+                exit 1
+
+            env:
+              - name: VLLM_USE_V2_MODEL_RUNNER
+                value: "1"
+              #- name: VLLM_NAN_DETECT
+              #  value: "1"
+              #- name: VLLM_ATTENTION_NAN_DETECT
+              #  value: "1"
+
+              - name: VLLM_NO_USAGE_STATS
+                value: "1"
+              - name: TQDM_DISABLE
+                value: "1"
+
+              # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
+              - name: VLLM_DEV_VENV
+                value: VLLM_DEV_VENV_PLACEHOLDER
+
+              # Enable on-demand profiling via /start_profile and /stop_profile
+              - name: VLLM_TORCH_PROFILER_DIR
+                value: "/traces"
+
+              # HuggingFace token and cache location
+              - name: HF_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: hf-secret
+                    key: HF_TOKEN
+                    optional: true
+              - name: HF_HOME
+                value: /mnt/local/hf_cache
+
+              # Compile caches - persist across restarts for faster startup
+              - name: VLLM_CACHE_ROOT
+                value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_extdp
+              - name: FLASHINFER_CACHE_DIR
+                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
+
+              # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
+              - name: TP_SIZE
+                value: "1"
+
+              - name: VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE
+                value: "1"
+
+              # Common vLLM settings
+              - name: TRITON_LIBCUDA_PATH
+                value: /usr/lib64
+              - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+                value: "1"
+              - name: NVIDIA_GDRCOPY
+                value: enabled
+
+              # Override container default that disables VMM
+              - name: NVSHMEM_DISABLE_CUDA_VMM
+                value: "0"
+
+              # UCX configuration for NIXL - use only working InfiniBand devices
+              # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
+              - name: UCX_NET_DEVICES
+                value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+
+              # Engine startup timeout (default 600s, increase for large models over network storage)
+              - name: VLLM_ENGINE_READY_TIMEOUT_S
+                value: "1800"
+
+              # Debug logging
+              - name: VLLM_LOGGING_LEVEL
+                value: INFO
+              #- name: NCCL_DEBUG
+              #  value: "TRACE"
+              #- name: NVSHMEM_DEBUG
+              #  value: INFO
+
+              # KV_TRANSFER_CONFIG and VLLM_NIXL_SIDE_CHANNEL_HOST are
+              # added by overlays (pd vs decode-bench use different connectors)
+            ports:
+              - containerPort: 8000
+                name: vllm-rank0
+                protocol: TCP
+              - containerPort: 8001
+                name: vllm-rank1
+                protocol: TCP
+              - containerPort: 8002
+                name: vllm-rank2
+                protocol: TCP
+              - containerPort: 8003
+                name: vllm-rank3
+                protocol: TCP
+            readinessProbe:
+              exec:
+                command:
+                  - /bin/bash
+                  - -c
+                  - |
+                    for port in 8000 8001 8002 8003; do
+                      curl -sf http://localhost:$port/v1/models | grep -q '"id"' || exit 1
+                    done
+              periodSeconds: 5
+              failureThreshold: 60
+            resources:
+              claims:
+                - name: compute-domain-channel
+              limits:
+                ephemeral-storage: 128Gi
+                memory: 512Gi
+                nvidia.com/gpu: "4"
+              requests:
+                cpu: 32
+                ephemeral-storage: 128Gi
+                memory: 512Gi
+                nvidia.com/gpu: "4"
+            volumeMounts:
+              - mountPath: /dev/shm
+                name: dshm
+              - mountPath: /mnt/lustre
+                name: lustre
+              - mountPath: /mnt/local
+                name: local-nvme
+            workingDir: /code
