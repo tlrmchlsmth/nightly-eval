@@ -1,7 +1,7 @@
 FROM golang:1.25-alpine AS nyann-bench-build
 WORKDIR /src
 RUN apk add --no-cache git
-RUN git clone --depth=1 -b pr-53 \
+RUN git clone --depth=1 -b main \
     https://github.com/neuralmagic/nyann-bench.git .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /nyann-bench ./cmd/nyann-bench/
 
