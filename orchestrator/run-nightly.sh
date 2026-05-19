@@ -47,7 +47,7 @@ deploy_serving() {
   log "  Image: $VLLM_IMAGE"
 
   # Render kustomize for selected mode
-  rendered=$(mktemp /tmp/nightly-serving-XXXXXX.yaml)
+  rendered=$(mktemp)
   kubectl kustomize --load-restrictor=LoadRestrictionsNone "$NIGHTLY_DIR/serving/$mode" \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
           -e "s/OWNER_PLACEHOLDER/$OWNER/g" \
