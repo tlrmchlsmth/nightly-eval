@@ -210,7 +210,7 @@ run_staircase() {
 
   log "Staircase: $job_name (c=$sweep_min-$sweep_max, $sweep_steps steps)"
   run_bench "$job_name" "$base_url" "$bench_config" 8
-  $KN wait --for=condition=Complete "job/$job_name" --timeout=600s
+  $KN wait --for=condition=Complete "job/$job_name" --timeout=1800s
   collect_results "$job_name" > "$output_dir/summary.json" 2>/dev/null || true
   cleanup_bench "$job_name"
 }
