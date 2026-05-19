@@ -16,17 +16,20 @@ spec:
         spec:
           serviceAccountName: nightly-eval-orchestrator
           restartPolicy: Never
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
           affinity:
             nodeAffinity:
               requiredDuringSchedulingIgnoredDuringExecution:
                 nodeSelectorTerms:
                 - matchExpressions:
-                  - key: kubernetes.io/arch
-                    operator: In
-                    values: ["amd64"]
+                  - key: nvidia.com/gpu.present
+                    operator: Exists
           containers:
             - name: orchestrator
-              image: ${ORCHESTRATOR_IMAGE}
+              image: ghcr.io/tlrmchlsmth/nightly-eval-orchestrator:latest
               imagePullPolicy: Always
               command: ["/bin/bash", "/workspace/nightly-eval/orchestrator/run-nightly.sh"]
               env:
