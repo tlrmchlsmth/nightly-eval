@@ -29,7 +29,7 @@ rules:
     resources: ["gateways", "httproutes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["inference.networking.x-k8s.io", "inference.networking.k8s.io"]
-    resources: ["inferencepools"]
+    resources: ["inferencepools", "inferencemodelrewrites", "inferenceobjectives"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["networking.istio.io"]
     resources: ["destinationrules"]
