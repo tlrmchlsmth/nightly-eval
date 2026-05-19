@@ -28,6 +28,44 @@ mkdir -p "$RUN_DIR"
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
+# === Data Prep: ensure benchmark datasets exist on Lustre ===
+ensure_datasets() {
+  local corpus_dir="$LUSTRE_PREFIX/corpus"
+  local gsm8k_test="$LUSTRE_PREFIX/gsm8k_test.jsonl"
+  local gsm8k_train="$LUSTRE_PREFIX/gsm8k_train.jsonl"
+  local sharegpt="$corpus_dir/sharegpt.txt"
+
+  mkdir -p "$corpus_dir"
+
+  if [ ! -f "$gsm8k_test" ]; then
+    log "Downloading GSM8K test split..."
+    curl -fSL -o "$gsm8k_test" \
+      "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl"
+  fi
+
+  if [ ! -f "$gsm8k_train" ]; then
+    log "Downloading GSM8K train split..."
+    curl -fSL -o "$gsm8k_train" \
+      "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/train.jsonl"
+  fi
+
+  if [ ! -f "$sharegpt" ]; then
+    log "Downloading ShareGPT corpus (this may take a minute)..."
+    local sharegpt_json
+    sharegpt_json=$(mktemp)
+    curl -fSL -o "$sharegpt_json" \
+      "https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json"
+    # Extract conversation text into flat file for corpus workload
+    jq -r '.[].conversations[]?.value // empty' "$sharegpt_json" > "$sharegpt"
+    rm -f "$sharegpt_json"
+  fi
+
+  log "Datasets ready:"
+  log "  $(wc -l < "$gsm8k_test") GSM8K test problems"
+  log "  $(wc -l < "$gsm8k_train") GSM8K train problems"
+  log "  $(wc -c < "$sharegpt" | tr -d ' ') bytes ShareGPT corpus"
+}
+
 # === Helper: Deploy serving stack for one config ===
 deploy_serving() {
   local config_file="$1"
@@ -242,6 +280,8 @@ run_gsm8k() {
 log "=== Nightly eval starting ==="
 log "  vLLM image: $VLLM_IMAGE"
 log "  Results:    $RUN_DIR"
+
+ensure_datasets
 
 echo "{\"vllm_image\": \"$VLLM_IMAGE\", \"start\": \"$(date -Iseconds)\", \"configs\": []}" \
   > "$RUN_DIR/metadata.json"
