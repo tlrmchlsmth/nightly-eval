@@ -185,6 +185,7 @@ run_bench() {
 
   log "Deploying benchmark: $job_name (workers=$n_workers)"
   nyann-bench generate \
+    --json \
     --kube \
     --kube.name "$job_name" \
     --kube.namespace "$NAMESPACE" \
@@ -197,14 +198,13 @@ run_bench() {
 }
 
 # === Helper: Collect JSON results from a completed Job ===
-# nyann-bench prints the JSON summary (pretty-printed) to stdout and logs to stderr.
-# kubectl logs merges both, so we strip log lines and parse the remaining JSON.
+# With --json, nyann-bench outputs only the JSON summary to stdout.
 collect_results() {
   local job_name="$1"
   local pods
   pods=$($KN get pods -l "app=$job_name" -o jsonpath='{.items[*].metadata.name}')
   for pod in $pods; do
-    $KN logs "$pod" -c nyann-bench 2>/dev/null | sed -n '/^{/,/^}/p' | jq -c '.' 2>/dev/null
+    $KN logs "$pod" -c nyann-bench 2>/dev/null | jq -c '.' 2>/dev/null
   done
 }
 
