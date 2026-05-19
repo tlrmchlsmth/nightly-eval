@@ -18,7 +18,7 @@ NIGHTLY_DIR="${NIGHTLY_DIR:-.}"
 
 INFPOOL_CHART="oci://registry.k8s.io/gateway-api-inference-extension/charts/inferencepool"
 INFPOOL_VERSION="v1.5.0"
-NYANN_BENCH_IMAGE="${NYANN_BENCH_IMAGE:-ghcr.io/neuralmagic/nyann-bench:consolidate-workers-flag}"
+NYANN_BENCH_IMAGE="${NYANN_BENCH_IMAGE:-ghcr.io/neuralmagic/nyann-bench:pr-53}"
 BENCH_ARCH="${BENCH_ARCH:-arm64}"
 
 KN="kubectl -n $NAMESPACE"
