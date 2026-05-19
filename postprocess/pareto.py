@@ -6,52 +6,77 @@ Usage:
 
 Reads:
     - metadata.json (config list with num_gpus)
-    - <config>/staircase/summary.json (nyann-bench JSON summary per config)
+    - <config>/staircase/summary.json (nyann-bench JSON summaries, one per line per worker)
 
 Outputs:
-    - pareto.csv   (one row per config × stage)
+    - pareto.csv   (one row per config x stage)
     - pareto.png   (scatter + Pareto frontier)
 """
 
 import csv
 import json
-import os
 import sys
 from pathlib import Path
 
 
-def load_summary(summary_path: Path) -> list[dict]:
-    """Parse a nyann-bench summary JSON and extract per-stage stats."""
+def load_stages(summary_path: Path) -> list[dict]:
+    """Parse nyann-bench summary JSON and extract per-stage stats.
+
+    Each line in the file is either a log line or a JSON summary from one worker.
+    We look for JSON objects with a "stages" array.
+    """
+    if not summary_path.exists():
+        return []
+
+    stages_by_idx: dict[int, list[dict]] = {}
+
     with open(summary_path) as f:
-        content = f.read().strip()
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
-    # nyann-bench collect outputs one JSON block per pod, separated by
-    # "--- pod-name ---" headers. Find JSON blocks.
-    stages = []
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line or line.startswith("---"):
-            continue
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+            for s in data.get("stages", []):
+                idx = s.get("stage", 0)
+                stages_by_idx.setdefault(idx, []).append(s)
 
-        # Each summary has "stages" with per-stage metrics
-        if "stages" in data:
-            for s in data["stages"]:
-                stages.append(s)
-        elif "summary" in data and "stages" in data["summary"]:
-            for s in data["summary"]["stages"]:
-                stages.append(s)
+    # Merge per-worker stage stats by summing throughput and averaging latencies
+    merged = []
+    for idx in sorted(stages_by_idx):
+        workers = stages_by_idx[idx]
+        concurrency = workers[0].get("concurrency", 0)
+        duration = max(w.get("duration_seconds", 0) for w in workers)
+        total_tok_s = sum(w.get("output_tokens_per_second", 0) for w in workers)
+        requests = sum(w.get("requests", 0) for w in workers)
 
-    return stages
+        # Average latency percentiles across workers (weighted by request count would
+        # be better, but simple average is fine for the Pareto chart)
+        def avg_latency(key: str, sub: str) -> float:
+            vals = [w[key][sub] for w in workers if key in w and sub in w[key]]
+            return sum(vals) / len(vals) if vals else 0
+
+        merged.append({
+            "stage": idx,
+            "concurrency": concurrency,
+            "duration_seconds": duration,
+            "output_tokens_per_second": total_tok_s,
+            "requests": requests,
+            "itl_p50": avg_latency("itl_ms", "p50"),
+            "itl_p95": avg_latency("itl_ms", "p90"),
+            "itl_p99": avg_latency("itl_ms", "p99"),
+            "ttft_p50": avg_latency("ttft_ms", "p50"),
+            "ttft_p95": avg_latency("ttft_ms", "p90"),
+        })
+
+    return merged
 
 
-def compute_pareto_points(
-    run_dir: Path,
-) -> list[dict]:
-    """Compute (tpot, tok/sec/gpu) for each config × stage."""
+def compute_pareto_points(run_dir: Path) -> list[dict]:
+    """Compute (tpot, tok/sec/gpu) for each config x stage."""
     meta_path = run_dir / "metadata.json"
     if not meta_path.exists():
         print(f"ERROR: {meta_path} not found", file=sys.stderr)
@@ -67,47 +92,28 @@ def compute_pareto_points(
         num_gpus = cfg["num_gpus"]
         summary_path = run_dir / config_name / "staircase" / "summary.json"
 
-        if not summary_path.exists():
-            print(f"WARN: {summary_path} not found, skipping", file=sys.stderr)
-            continue
-
-        stages = load_summary(summary_path)
+        stages = load_stages(summary_path)
         if not stages:
             print(f"WARN: no stages found in {summary_path}", file=sys.stderr)
             continue
 
         for stage in stages:
-            concurrency = stage.get("concurrency", 0)
-            duration_s = stage.get("duration_seconds", stage.get("duration", 0))
-            total_tokens = stage.get("total_output_tokens", 0)
-            num_requests = stage.get("num_requests", stage.get("completed", 0))
-
-            # TPOT: median inter-token latency across requests
-            tpot_p50 = stage.get("itl_p50", stage.get("itl_ms_p50", 0))
-            tpot_p95 = stage.get("itl_p95", stage.get("itl_ms_p95", 0))
-            tpot_p99 = stage.get("itl_p99", stage.get("itl_ms_p99", 0))
-
-            ttft_p50 = stage.get("ttft_p50", stage.get("ttft_ms_p50", 0))
-            ttft_p95 = stage.get("ttft_p95", stage.get("ttft_ms_p95", 0))
-
-            # tok/sec/GPU: aggregate throughput normalized by GPU count
-            tok_per_sec = total_tokens / duration_s if duration_s > 0 else 0
+            tok_per_sec = stage["output_tokens_per_second"]
             tok_per_sec_per_gpu = tok_per_sec / num_gpus if num_gpus > 0 else 0
 
             points.append({
                 "config": config_name,
                 "num_gpus": num_gpus,
-                "concurrency": concurrency,
-                "tpot_p50_ms": tpot_p50,
-                "tpot_p95_ms": tpot_p95,
-                "tpot_p99_ms": tpot_p99,
-                "ttft_p50_ms": ttft_p50,
-                "ttft_p95_ms": ttft_p95,
+                "concurrency": stage["concurrency"],
+                "tpot_p50_ms": stage["itl_p50"],
+                "tpot_p95_ms": stage["itl_p95"],
+                "tpot_p99_ms": stage["itl_p99"],
+                "ttft_p50_ms": stage["ttft_p50"],
+                "ttft_p95_ms": stage["ttft_p95"],
                 "tok_per_sec": round(tok_per_sec, 1),
                 "tok_per_sec_per_gpu": round(tok_per_sec_per_gpu, 1),
-                "total_output_tokens": total_tokens,
-                "num_requests": num_requests,
-                "duration_s": duration_s,
+                "num_requests": stage["requests"],
+                "duration_s": stage["duration_seconds"],
             })
 
     return points
@@ -157,13 +163,11 @@ def plot_pareto(points: list[dict], frontier: list[dict], path: Path):
         y = [p["tok_per_sec_per_gpu"] for p in cfg_points]
         ax.scatter(x, y, color=config_colors[config], label=config, s=80, zorder=3)
 
-        # Connect stages within same config
         sorted_cfg = sorted(cfg_points, key=lambda p: p["concurrency"])
         x_line = [p["tpot_p50_ms"] for p in sorted_cfg]
         y_line = [p["tok_per_sec_per_gpu"] for p in sorted_cfg]
         ax.plot(x_line, y_line, color=config_colors[config], alpha=0.3, linewidth=1)
 
-        # Annotate concurrency
         for p in cfg_points:
             ax.annotate(
                 str(p["concurrency"]),
@@ -174,7 +178,6 @@ def plot_pareto(points: list[dict], frontier: list[dict], path: Path):
                 alpha=0.7,
             )
 
-    # Pareto frontier line
     if frontier:
         fx = [p["tpot_p50_ms"] for p in frontier]
         fy = [p["tok_per_sec_per_gpu"] for p in frontier]
@@ -213,7 +216,6 @@ def main():
     png_path = run_dir / "pareto.png"
     plot_pareto(points, frontier, png_path)
 
-    # Also write frontier as separate CSV
     frontier_path = run_dir / "pareto_frontier.csv"
     write_csv(frontier, frontier_path)
     print(f"Wrote {len(frontier)} frontier points to {frontier_path}")

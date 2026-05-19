@@ -196,13 +196,15 @@ run_bench() {
     --config "$config_json"
 }
 
-# === Helper: Collect results from a completed Job ===
+# === Helper: Collect JSON results from a completed Job ===
+# nyann-bench prints the JSON summary to stdout and logs to stderr.
+# kubectl logs merges both, so we filter to only keep lines that are valid JSON.
 collect_results() {
   local job_name="$1"
   local pods
   pods=$($KN get pods -l "app=$job_name" -o jsonpath='{.items[*].metadata.name}')
   for pod in $pods; do
-    $KN logs "$pod" -c nyann-bench 2>/dev/null
+    $KN logs "$pod" -c nyann-bench 2>/dev/null | jq -c '.' 2>/dev/null
   done
 }
 

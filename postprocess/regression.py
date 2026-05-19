@@ -6,7 +6,7 @@ Usage:
 
 Reads:
     - pareto.csv (from pareto.py)
-    - <config>/gsm8k-pre/summary.json, <config>/gsm8k-post/summary.json
+    - <config>-gsm8k-{pre,post}/summary.json
     - ../baseline.json (rolling 7-day baseline, if exists)
 
 Outputs:
@@ -19,42 +19,33 @@ import json
 import sys
 from pathlib import Path
 
-TPOT_REGRESSION_THRESHOLD = 0.10  # 10% TPOT regression
-THROUGHPUT_REGRESSION_THRESHOLD = 0.05  # 5% throughput drop
-GSM8K_ABSOLUTE_THRESHOLD = 0.95  # 95% minimum accuracy (DeepSeek-R1)
-GSM8K_DELTA_THRESHOLD = 0.02  # 2% pre→post accuracy drop
+TPOT_REGRESSION_THRESHOLD = 0.10
+THROUGHPUT_REGRESSION_THRESHOLD = 0.05
+GSM8K_ABSOLUTE_THRESHOLD = 0.95
+GSM8K_DELTA_THRESHOLD = 0.02
 
 
 def load_gsm8k_accuracy(summary_path: Path) -> float | None:
-    """Extract accuracy from a GSM8K eval summary."""
+    """Extract accuracy from a nyann-bench GSM8K eval summary.
+
+    Each line is either a log line or a JSON summary. The summary has
+    eval_accuracy (float, 0-1) when the gsm8k workload type is used.
+    """
     if not summary_path.exists():
         return None
 
     with open(summary_path) as f:
-        content = f.read().strip()
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line or line.startswith("---"):
-            continue
-        try:
-            data = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        # Look for accuracy in various formats
-        if "accuracy" in data:
-            return float(data["accuracy"])
-        if "eval" in data and "accuracy" in data["eval"]:
-            return float(data["eval"]["accuracy"])
-        if "summary" in data:
-            summary = data["summary"]
-            if "accuracy" in summary:
-                return float(summary["accuracy"])
-            if "eval_correct" in summary and "eval_total" in summary:
-                total = summary["eval_total"]
-                if total > 0:
-                    return summary["eval_correct"] / total
+            if "eval_accuracy" in data and data["eval_accuracy"] > 0:
+                return float(data["eval_accuracy"])
 
     return None
 
@@ -137,7 +128,6 @@ def check_perf_regression(
         if not cfg_points:
             continue
 
-        # Use peak concurrency point for comparison
         peak = max(cfg_points, key=lambda p: p["concurrency"])
         base = baseline_by_config.get(config)
 
@@ -152,24 +142,22 @@ def check_perf_regression(
         messages = []
         status = "pass"
 
-        # TPOT regression
         if base.get("tpot_p50_ms", 0) > 0:
             tpot_ratio = peak["tpot_p50_ms"] / base["tpot_p50_ms"]
             if tpot_ratio > 1 + TPOT_REGRESSION_THRESHOLD:
                 status = "warn"
                 messages.append(
                     f"TPOT p50 regressed {(tpot_ratio - 1) * 100:.1f}% "
-                    f"({base['tpot_p50_ms']:.1f}ms → {peak['tpot_p50_ms']:.1f}ms)"
+                    f"({base['tpot_p50_ms']:.1f}ms -> {peak['tpot_p50_ms']:.1f}ms)"
                 )
 
-        # Throughput regression
         if base.get("tok_per_sec_per_gpu", 0) > 0:
             tput_ratio = peak["tok_per_sec_per_gpu"] / base["tok_per_sec_per_gpu"]
             if tput_ratio < 1 - THROUGHPUT_REGRESSION_THRESHOLD:
                 status = "warn"
                 messages.append(
                     f"tok/sec/GPU dropped {(1 - tput_ratio) * 100:.1f}% "
-                    f"({base['tok_per_sec_per_gpu']:.1f} → {peak['tok_per_sec_per_gpu']:.1f})"
+                    f"({base['tok_per_sec_per_gpu']:.1f} -> {peak['tok_per_sec_per_gpu']:.1f})"
                 )
 
         results.append({
@@ -195,7 +183,6 @@ def update_baseline(run_dir: Path, points: list[dict]):
         with open(baseline_path) as f:
             baseline = json.load(f)
 
-    # Add current run to history
     configs = sorted(set(p["config"] for p in points))
     current = {}
     for config in configs:
@@ -215,10 +202,8 @@ def update_baseline(run_dir: Path, points: list[dict]):
         "configs": current,
     })
 
-    # Keep last 7 days
     baseline["history"] = baseline["history"][-7:]
 
-    # Compute rolling median as new baseline
     from statistics import median
 
     all_configs = set()
@@ -309,11 +294,9 @@ def main():
     print(f"\nRegression report: {report_path}")
     print(f"Overall status: {overall_status.upper()}")
 
-    # Update baseline
     if points:
         update_baseline(run_dir, points)
 
-    # Exit with non-zero if any failures
     if overall_status == "fail":
         sys.exit(1)
 
