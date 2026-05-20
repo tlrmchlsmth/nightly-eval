@@ -130,11 +130,11 @@ deploy_serving() {
   env_count=$(yq '.env // {} | length' "$config_file")
   if [ "$env_count" -gt 0 ]; then
     log "  Env overrides ($env_count):"
-    for key in $(yq '.env // {} | keys | .[]' "$config_file"); do
+    yq '.env // {} | keys | .[]' "$config_file" | while IFS= read -r key; do
       local val
       val=$(yq ".env.\"$key\"" "$config_file")
       log "    $key=$val"
-      yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env) |= (map(select(.name != \"$key\")) + [{\"name\": \"$key\", \"value\": \"$val\"}])" "$rendered"
+      key="$key" val="$val" yq -i '(select(.kind == "LeaderWorkerSet" and (.metadata.name | test("decode"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env) |= ((. // []) | map(select(.name != strenv(key))) + [{"name": strenv(key), "value": strenv(val)}])' "$rendered"
     done
   fi
 
