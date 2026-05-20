@@ -125,6 +125,19 @@ deploy_serving() {
     yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].args[0]) |= sub(\"vllm serve\"; \"vllm serve $decode_extra_args\")" "$rendered"
   fi
 
+  # Per-config env var overrides
+  local env_count
+  env_count=$(yq '.env // {} | length' "$config_file")
+  if [ "$env_count" -gt 0 ]; then
+    log "  Env overrides ($env_count):"
+    for key in $(yq '.env // {} | keys | .[]' "$config_file"); do
+      local val
+      val=$(yq ".env.\"$key\"" "$config_file")
+      log "    $key=$val"
+      yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env) |= (map(select(.name != \"$key\")) + [{\"name\": \"$key\", \"value\": \"$val\"}])" "$rendered"
+    done
+  fi
+
   $KN apply -f "$rendered"
   rm -f "$rendered"
 
