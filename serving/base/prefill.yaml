@@ -75,16 +75,6 @@ spec:
                   cd -
                 fi
 
-                # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
-                if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
-                  echo "Using dev venv at ${VLLM_DEV_VENV}"
-                  source "${VLLM_DEV_VENV}/bin/activate"
-                else
-                  source /opt/vllm/bin/activate
-                fi
-
-                uv pip install --upgrade mistral_common
-
                 DP_SIZE_LOCAL=$((4 / TP_SIZE))
                 DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
@@ -152,10 +142,6 @@ spec:
                 value: "1"
               - name: TQDM_DISABLE
                 value: "1"
-
-              # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
-              - name: VLLM_DEV_VENV
-                value: VLLM_DEV_VENV_PLACEHOLDER
 
               # Enable on-demand profiling via /start_profile and /stop_profile
               - name: VLLM_TORCH_PROFILER_DIR

@@ -142,16 +142,6 @@ spec:
                   cd -
                 fi
 
-                # DEV mode: use persistent Lustre venv; otherwise use baked-in image venv
-                if [ -n "${VLLM_DEV_VENV}" ] && [ -d "${VLLM_DEV_VENV}" ]; then
-                  echo "Using dev venv at ${VLLM_DEV_VENV}"
-                  source "${VLLM_DEV_VENV}/bin/activate"
-                else
-                  source /opt/vllm/bin/activate
-                fi
-
-                uv pip install --upgrade mistral_common
-
                 # Derive batch-size-dependent env vars from MAX_TOKENS
                 export VLLM_MOE_DP_CHUNK_SIZE=$MAX_TOKENS
                 # NVSHMEM_QP_DEPTH only needed for DeepEP
@@ -245,10 +235,6 @@ spec:
                 value: "1"
               - name: TQDM_DISABLE
                 value: "1"
-
-              # Set to a Lustre venv path to override baked-in vLLM (e.g. LUSTRE_PREFIX_PLACEHOLDER/vllm-venv)
-              - name: VLLM_DEV_VENV
-                value: VLLM_DEV_VENV_PLACEHOLDER
 
               # DeepEP low-latency only: NVFP4 dispatch + masked_gemm
               #- name: VLLM_DEEPEPLL_NVFP4_DISPATCH

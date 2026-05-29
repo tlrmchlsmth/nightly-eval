@@ -89,7 +89,6 @@ deploy_serving() {
   kubectl kustomize --load-restrictor=LoadRestrictionsNone "$NIGHTLY_DIR/serving/$mode" \
     | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
           -e "s/OWNER_PLACEHOLDER/$OWNER/g" \
-          -e "s|VLLM_DEV_VENV_PLACEHOLDER||g" \
           -e "s|LUSTRE_PREFIX_PLACEHOLDER|$LUSTRE_PREFIX|g" \
           -e "s|VLLM_IMAGE_PLACEHOLDER|$VLLM_IMAGE|g" \
           -e "s|FORK_REPO_PLACEHOLDER||g" \
@@ -167,13 +166,19 @@ wait_for_ready() {
   timeout="${2:-1800}"
 
   log "Waiting for decode LWS readiness (timeout=${timeout}s)..."
-  $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
-    "lws/${DEPLOY_NAME}-decode" --timeout="${timeout}s"
+  if ! $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
+    "lws/${DEPLOY_NAME}-decode" --timeout="${timeout}s"; then
+    log "FAIL: decode LWS not ready after ${timeout}s"
+    return 1
+  fi
 
   if [ "$mode" = "pd" ]; then
     log "Waiting for prefill LWS readiness..."
-    $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
-      "lws/${DEPLOY_NAME}-prefill" --timeout="${timeout}s"
+    if ! $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
+      "lws/${DEPLOY_NAME}-prefill" --timeout="${timeout}s"; then
+      log "FAIL: prefill LWS not ready after ${timeout}s"
+      return 1
+    fi
   fi
 
   log "Serving stack ready."
