@@ -13,4 +13,4 @@ sweep:
   min: 128
   max: 2048
   steps: 5
-  step_duration: "45s"
+  step_duration: "180s"
