@@ -109,7 +109,7 @@ spec:
                   cd -
                 fi
 
-                pip install "nvidia-cutlass-dsl[cu13]==4.5.0" && pip uninstall -y quack-kernels
+                pip install "nvidia-cutlass-dsl[cu13]==4.5.0"
 
                 if [ -n "${NVSHMEM_CUMEM_HANDLE_TYPE:-}" ]; then
                   export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2 + 2))
