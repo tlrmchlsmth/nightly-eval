@@ -7,7 +7,7 @@ decode:
   max_tokens: 256
   extra_args: "--all2all-backend deepep_v2"
 prefill:
-  replicas: 2
+  replicas: 1
   tp_size: 1
 sweep:
   min: 64

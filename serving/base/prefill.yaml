@@ -7,7 +7,7 @@ metadata:
     llm-d.ai/model: DeepSeek-V4-Pro
     llm-d.ai/role: prefill
 spec:
-  replicas: 2
+  replicas: 1
   rolloutStrategy:
     type: RollingUpdate
     rollingUpdateConfiguration:

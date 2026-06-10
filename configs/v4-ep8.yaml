@@ -7,7 +7,7 @@ decode:
   max_tokens: 512
   extra_args: ""
 prefill:
-  replicas: 2
+  replicas: 1
   tp_size: 1
 sweep:
   min: 64
