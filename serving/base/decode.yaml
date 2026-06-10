@@ -198,14 +198,6 @@ spec:
               - name: TORCH_SYMMMEM
                 value: NVSHMEM
 
-              - name: UCX_CUDA_IPC_ENABLE_MNNVL
-                value: "y"
-              - name: UCX_TLS
-                value: cuda_copy,cuda_ipc,tcp
-              - name: UCX_MEMTYPE_CACHE
-                value: "n"
-              - name: UCX_MEMTYPE_REG_WHOLE
-                value: "n"
               - name: UCX_NET_DEVICES
                 value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
 
