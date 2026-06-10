@@ -111,7 +111,10 @@ spec:
 
                 if [ -n "${NVSHMEM_CUMEM_HANDLE_TYPE:-}" ]; then
                   export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2 + 2))
-                  uv pip install --system --no-build-isolation nvidia-nccl-cu13
+                  pip install --no-build-isolation nvidia-nccl-cu13
+                  NCCL_LIB=$(python3 -c "import nvidia.nccl; print(nvidia.nccl.__path__[0])")/lib
+                  export LD_LIBRARY_PATH="${NCCL_LIB}:${LD_LIBRARY_PATH:-}"
+                  echo "Installed NCCL from PyPI, lib at $NCCL_LIB"
                 fi
 
                 find /dev/shm -type f -delete
