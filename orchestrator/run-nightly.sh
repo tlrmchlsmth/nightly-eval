@@ -12,7 +12,7 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-vllm}"
 DEPLOY_NAME="${DEPLOY_NAME:-nightly-wide-ep}"
 OWNER="${OWNER:-nightly}"
-VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:nightly}"
+VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.23.0}"
 LUSTRE_PREFIX="${LUSTRE_PREFIX:-/mnt/lustre/nightly}"
 NIGHTLY_DIR="${NIGHTLY_DIR:-.}"
 

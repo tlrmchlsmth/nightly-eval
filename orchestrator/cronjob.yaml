@@ -31,7 +31,7 @@ spec:
               command: ["/bin/bash", "/workspace/nightly-eval/orchestrator/run-nightly.sh"]
               env:
                 - name: VLLM_IMAGE
-                  value: "vllm/vllm-openai:nightly"
+                  value: "vllm/vllm-openai:v0.23.0"
                 - name: NAMESPACE
                   value: "vllm"
                 - name: NIGHTLY_DIR
