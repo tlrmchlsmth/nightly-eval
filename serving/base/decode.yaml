@@ -111,6 +111,7 @@ spec:
 
                 if [ -n "${NVSHMEM_CUMEM_HANDLE_TYPE:-}" ]; then
                   export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2 + 2))
+                  uv pip install --no-build-isolation nvidia-nccl-cu13
                 fi
 
                 find /dev/shm -type f -delete
