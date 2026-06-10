@@ -212,6 +212,11 @@ spec:
               - name: NCCL_SOCKET_IFNAME
                 value: eth0
 
+              - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+
               - name: VLLM_ENGINE_READY_TIMEOUT_S
                 value: "1800"
               - name: VLLM_LOGGING_LEVEL
