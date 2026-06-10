@@ -109,6 +109,8 @@ spec:
                   cd -
                 fi
 
+                pip install "cudnn-frontend<1.22"
+
                 if [ -n "${NVSHMEM_CUMEM_HANDLE_TYPE:-}" ]; then
                   export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2 + 2))
                   pip install --upgrade --no-build-isolation nvidia-nccl-cu13
