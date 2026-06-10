@@ -34,8 +34,8 @@ inferencePool:
     - number: 8003
   modelServers:
     matchLabels:
-      llm-d.ai/inferenceServing: "true"
-      llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+      llm-d.ai/inference-serving: "true"
+      llm-d.ai/model: DeepSeek-V4-Pro
       llm-d.ai/deployment: pd
       llm-d.ai/owner: ${OWNER}
 

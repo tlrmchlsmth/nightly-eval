@@ -3,8 +3,8 @@ kind: LeaderWorkerSet
 metadata:
   name: wide-ep-prefill
   labels:
-    llm-d.ai/inferenceServing: "true"
-    llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+    llm-d.ai/inference-serving: "true"
+    llm-d.ai/model: DeepSeek-V4-Pro
     llm-d.ai/role: prefill
 spec:
   replicas: 2
@@ -13,18 +13,20 @@ spec:
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 1
+    size: 2
     workerTemplate:
       metadata:
         labels:
           llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
-          llm-d.ai/inferenceServing: "true"
-          llm-d.ai/model: DeepSeek-R1-0528-NVFP4-v2
+          llm-d.ai/inference-serving: "true"
+          llm-d.ai/model: DeepSeek-V4-Pro
           llm-d.ai/owner: OWNER_PLACEHOLDER
           llm-d.ai/role: prefill
       spec:
-        serviceAccountName: wide-ep
+        serviceAccountName: deepseek-v4
         terminationGracePeriodSeconds: 0
+        nodeSelector:
+          oci.oraclecloud.com/rack-name: oci-bth-aiaccelerator-prd005-hpc-rack-1
         volumes:
           - name: dshm
             emptyDir:
@@ -57,7 +59,6 @@ spec:
             args:
               - |-
                 set -euo pipefail
-                # Persist logs to Lustre so they survive LWS pod recreation
                 LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/prefill
                 mkdir -p "$LOG_DIR"
                 LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
@@ -66,7 +67,7 @@ spec:
 
                 FORK_REPO="FORK_REPO_PLACEHOLDER"
                 FORK_BRANCH="FORK_BRANCH_PLACEHOLDER"
-                if [ -n "$FORK_BRANCH" ]; then
+                if [ -n "$FORK_BRANCH" ] && [ -d /opt/vllm-source ]; then
                   cd /opt/vllm-source
                   git remote add fork "$FORK_REPO" 2>/dev/null || git remote set-url fork "$FORK_REPO"
                   git fetch fork "$FORK_BRANCH"
@@ -75,79 +76,46 @@ spec:
                   cd -
                 fi
 
-                DP_SIZE_LOCAL=$((4 / TP_SIZE))
-                DP_SIZE=$((LWS_GROUP_SIZE * DP_SIZE_LOCAL))
+                find /dev/shm -type f -delete
+
                 START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
 
-                # Build DP flags only when there are multiple DP ranks
-                DP_FLAGS=""
-                if [ $DP_SIZE -gt 1 ]; then
-                  DP_FLAGS="--data-parallel-size $DP_SIZE \
-                    --data-parallel-size-local 1 \
-                    --data-parallel-address ${LWS_LEADER_ADDRESS} \
-                    --data-parallel-rpc-port 5555"
-                fi
-
-                for R in $(seq 0 $((DP_SIZE_LOCAL - 1))); do
-                  GPU_START=$((R * TP_SIZE))
-                  GPUS=$(seq -s, $GPU_START $((GPU_START + TP_SIZE - 1)))
-
-                  RANK_FLAGS=""
-                  if [ $DP_SIZE -gt 1 ]; then
-                    RANK_FLAGS="--data-parallel-rank $((START_RANK + R))"
-                  fi
-
-                  VLLM_CACHE_ROOT=${VLLM_CACHE_ROOT}/rank$R \
-                  FLASHINFER_CACHE_DIR=${FLASHINFER_CACHE_DIR}/rank$R \
-                  CUDA_VISIBLE_DEVICES=$GPUS vllm serve \
-                    nvidia/DeepSeek-R1-0528-NVFP4-v2 \
-                    --disable-uvicorn-access-log \
-                    --port $((8000 + R)) \
-                    --tensor-parallel-size $TP_SIZE \
-                    --enable-expert-parallel \
-                    $DP_FLAGS $RANK_FLAGS \
-                    --trust-remote-code \
-                    --kv_transfer_config "$KV_TRANSFER_CONFIG" \
-                    --gpu-memory-utilization 0.85 \
-                    --all2all-backend "flashinfer_nvlink_one_sided" \
-                    --disable_cascade_attn \
-                    --api-server-count 4 \
-                    --async-scheduling \
-                    --kv-cache-dtype fp8 \
-                    --enable-force-include-usage &
-                done
-
-                    #--all2all-backend "deepep_high_throughput" \
-                    # --attention_backend "CUTLASS_MLA" \
-                    #--profiler-config '{"profiler": "torch",
-                    #                    "torch_profiler_dir": "/traces",
-                    #                    "ignore_frontend": "true",
-                    #                    "delay_iterations": 5,
-                    #                    "max_iterations": 3}' \
-
-                # If any process exits, kill all and restart pod
-                wait -n
-                kill $(jobs -p) 2>/dev/null
-                exit 1
+                exec vllm serve \
+                  deepseek-ai/DeepSeek-V4-Pro \
+                  --port 8000 \
+                  --tokenizer-mode deepseek_v4 \
+                  --gpu-memory-utilization 0.95 \
+                  --trust-remote-code \
+                  --api-server-count 1 \
+                  --disable-uvicorn-access-log \
+                  --data-parallel-hybrid-lb \
+                  --enable-expert-parallel \
+                  --enable-ep-weight-filter \
+                  --enable-cumem-allocator \
+                  --tensor-parallel-size $TP_SIZE \
+                  --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
+                  --data-parallel-size-local $DP_SIZE_LOCAL \
+                  --data-parallel-address ${LWS_LEADER_ADDRESS} \
+                  --data-parallel-rpc-port 5555 \
+                  --data-parallel-start-rank $START_RANK \
+                  --kv_transfer_config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail"}' \
+                  --moe-backend deep_gemm_mega_moe \
+                  --enforce-eager \
+                  --max-num-batched-tokens 32768 \
+                  --block-size 256 \
+                  --no-disable-hybrid-kv-cache-manager \
+                  --no-async-scheduling \
+                  --enable-sleep-mode \
+                  --numa-bind \
+                  --kv-cache-dtype fp8 \
+                  --enable-force-include-usage
 
             env:
-              - name: VLLM_USE_V2_MODEL_RUNNER
-                value: "1"
-              #- name: VLLM_NAN_DETECT
-              #  value: "1"
-              #- name: VLLM_ATTENTION_NAN_DETECT
-              #  value: "1"
-
-              - name: VLLM_NO_USAGE_STATS
-                value: "1"
-              - name: TQDM_DISABLE
+              - name: DP_SIZE_LOCAL
+                value: "4"
+              - name: TP_SIZE
                 value: "1"
 
-              # Enable on-demand profiling via /start_profile and /stop_profile
-              - name: VLLM_TORCH_PROFILER_DIR
-                value: "/traces"
-
-              # HuggingFace token and cache location
               - name: HF_TOKEN
                 valueFrom:
                   secretKeyRef:
@@ -157,74 +125,84 @@ spec:
               - name: HF_HOME
                 value: /mnt/local/hf_cache
 
-              # Compile caches - persist across restarts for faster startup
               - name: VLLM_CACHE_ROOT
                 value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_extdp
-              - name: FLASHINFER_CACHE_DIR
-                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_cache_extdp
+              - name: FLASHINFER_WORKSPACE_BASE
+                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_workspace
 
-              # Tensor parallelism - GPUs per DP rank (DP_SIZE_LOCAL = 4 / TP_SIZE)
-              - name: TP_SIZE
-                value: "1"
-
-              - name: VLLM_DEEPEP_HIGH_THROUGHPUT_FORCE_INTRA_NODE
-                value: "1"
-
-              # Common vLLM settings
               - name: TRITON_LIBCUDA_PATH
                 value: /usr/lib64
+              - name: VLLM_SKIP_P2P_CHECK
+                value: "1"
               - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+                value: "1"
+              - name: VLLM_USE_DEEP_GEMM
                 value: "1"
               - name: NVIDIA_GDRCOPY
                 value: enabled
+              - name: TILELANG_CLEANUP_TEMP_FILES
+                value: "1"
 
-              # Override container default that disables VMM
-              - name: NVSHMEM_DISABLE_CUDA_VMM
-                value: "0"
+              - name: NCCL_MNNVL_ENABLE
+                value: "1"
+              - name: NCCL_NVLS_ENABLE
+                value: "1"
+              - name: NCCL_CUMEM_ENABLE
+                value: "1"
+              - name: NCCL_P2P_LEVEL
+                value: NVL
+              - name: VLLM_USE_NCCL_SYMM_MEM
+                value: "1"
+              - name: TORCH_SYMMMEM
+                value: NVSHMEM
 
-              # UCX configuration for NIXL - use only working InfiniBand devices
-              # Excluded: mlx5_2/5 are Ethernet/RoCE with no GID configured, mlx5_6 is DOWN
+              - name: UCX_CUDA_IPC_ENABLE_MNNVL
+                value: "y"
+              - name: UCX_TLS
+                value: cuda_copy,cuda_ipc,tcp
+              - name: UCX_MEMTYPE_CACHE
+                value: "n"
+              - name: UCX_MEMTYPE_REG_WHOLE
+                value: "n"
               - name: UCX_NET_DEVICES
                 value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
 
-              # Engine startup timeout (default 600s, increase for large models over network storage)
+              - name: GLOO_SOCKET_IFNAME
+                value: eth0
+              - name: NCCL_SOCKET_IFNAME
+                value: eth0
+
               - name: VLLM_ENGINE_READY_TIMEOUT_S
                 value: "1800"
-
-              # Debug logging
               - name: VLLM_LOGGING_LEVEL
                 value: INFO
-              #- name: NCCL_DEBUG
-              #  value: "TRACE"
-              #- name: NVSHMEM_DEBUG
-              #  value: INFO
 
-              # KV_TRANSFER_CONFIG and VLLM_NIXL_SIDE_CHANNEL_HOST are
-              # added by overlays (pd vs decode-bench use different connectors)
             ports:
               - containerPort: 8000
-                name: vllm-rank0
+                name: modelserver
                 protocol: TCP
-              - containerPort: 8001
-                name: vllm-rank1
-                protocol: TCP
-              - containerPort: 8002
-                name: vllm-rank2
-                protocol: TCP
-              - containerPort: 8003
-                name: vllm-rank3
-                protocol: TCP
+            startupProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              initialDelaySeconds: 0
+              periodSeconds: 1
+              timeoutSeconds: 5
+              failureThreshold: 2700
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 30
+              timeoutSeconds: 5
+              failureThreshold: 3
             readinessProbe:
-              exec:
-                command:
-                  - /bin/bash
-                  - -c
-                  - |
-                    for port in 8000 8001 8002 8003; do
-                      curl -sf http://localhost:$port/v1/models | grep -q '"id"' || exit 1
-                    done
-              periodSeconds: 5
-              failureThreshold: 60
+              httpGet:
+                path: /v1/models
+                port: 8000
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 3
             resources:
               claims:
                 - name: compute-domain-channel
@@ -244,4 +222,3 @@ spec:
                 name: lustre
               - mountPath: /mnt/local
                 name: local-nvme
-            workingDir: /code
