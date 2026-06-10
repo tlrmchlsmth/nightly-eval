@@ -31,7 +31,7 @@ spec:
               command: ["/bin/bash", "/workspace/nightly-eval/orchestrator/run-nightly.sh"]
               env:
                 - name: VLLM_IMAGE
-                  value: "vllm/vllm-openai:v0.23.0"
+                  value: "public.ecr.aws/q9t5s3a7/vllm-ci-postmerge-repo:967c5c3bc38891f4465d3f4e99917ed837bb3833"
                 - name: NAMESPACE
                   value: "vllm"
                 - name: NIGHTLY_DIR
