@@ -109,7 +109,7 @@ spec:
                   cd -
                 fi
 
-                pip install "nvidia-cutlass-dsl[cu13]==4.5.0"
+                uv pip install --system --force-reinstall --no-deps nvidia-cutlass-dsl-libs-cu13==4.5.2
 
                 if [ -n "${NVSHMEM_CUMEM_HANDLE_TYPE:-}" ]; then
                   export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2 + 2))
