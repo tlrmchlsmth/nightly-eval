@@ -125,10 +125,6 @@ spec:
               - name: HF_HOME
                 value: /mnt/local/hf_cache
 
-              - name: VLLM_CACHE_ROOT
-                value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_extdp
-              - name: FLASHINFER_WORKSPACE_BASE
-                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_workspace
 
               - name: TRITON_LIBCUDA_PATH
                 value: /usr/lib64

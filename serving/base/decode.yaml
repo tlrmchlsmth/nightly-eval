@@ -149,7 +149,7 @@ spec:
                   --enable-sleep-mode \
                   --stream-interval 50 \
                   --kv-cache-dtype fp8 \
-                  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY","mode":0}' \
+                  --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY","custom_ops":["all"]}' \
                   --enable-force-include-usage
 
             env:
@@ -169,10 +169,6 @@ spec:
               - name: HF_HOME
                 value: /mnt/local/hf_cache
 
-              - name: VLLM_CACHE_ROOT
-                value: LUSTRE_PREFIX_PLACEHOLDER/vllm_cache_extdp
-              - name: FLASHINFER_WORKSPACE_BASE
-                value: LUSTRE_PREFIX_PLACEHOLDER/flashinfer_workspace
 
               - name: TRITON_LIBCUDA_PATH
                 value: /usr/lib64
