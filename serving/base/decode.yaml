@@ -146,7 +146,6 @@ spec:
                   --stream-interval 50 \
                   --kv-cache-dtype fp8 \
                   --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY","mode":0}' \
-                  --enable-eplb \
                   --enable-force-include-usage
 
             env:
