@@ -13,7 +13,7 @@
 set -euo pipefail
 
 BRANCH="${1:-main}"
-JOB_NAME="${2:-nightly-eval-$(echo "$BRANCH" | tr '/' '-' | cut -c1-40)-$(date +%H%M%S)}"
+JOB_NAME="${2:-nightly-orchestrator-$(echo "$BRANCH" | tr '/' '-' | cut -c1-40)-$(date +%H%M%S)}"
 NAMESPACE="${NAMESPACE:-vllm}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
