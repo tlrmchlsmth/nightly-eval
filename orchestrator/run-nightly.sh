@@ -111,22 +111,84 @@ deploy_serving() {
   log "Deployed $config_name"
 }
 
+# === Helper: Check for pods stuck in ContainerCreating (DRA issues) ===
+check_stuck_pods() {
+  local stuck_timeout="${1:-300}"
+  local stuck
+  stuck=$($KN get pods -l "llm-d.ai/model=DeepSeek-V4-Pro" -o json 2>/dev/null \
+    | jq -r --argjson threshold "$stuck_timeout" '
+      .items[] |
+      select(.status.containerStatuses == null and .status.phase == "Pending") |
+      select(.status.conditions[]? | select(.type == "PodScheduled" and .status == "True")) |
+      .metadata.name as $pod |
+      (.status.conditions[] | select(.type == "PodScheduled") | .lastTransitionTime) as $scheduled |
+      (now - ($scheduled | fromdateiso8601)) as $age |
+      select($age > $threshold) |
+      "\($pod) stuck on \(.spec.nodeName // "unknown") for \($age | floor)s"
+    ' 2>/dev/null)
+  if [ -n "$stuck" ]; then
+    echo "$stuck"
+    return 1
+  fi
+  return 0
+}
+
 # === Helper: Wait for serving readiness ===
 wait_for_ready() {
   local config_dir="$1"
   local timeout="${2:-3600}"
+  local stuck_check_interval=30
+  local stuck_timeout=300
+  local elapsed=0
 
   log "Waiting for decode LWS readiness (timeout=${timeout}s)..."
-  if ! $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
-    "lws/${DEPLOY_NAME}-decode" --timeout="${timeout}s"; then
+
+  while [ $elapsed -lt $timeout ]; do
+    # Check if decode LWS is ready
+    if $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
+      "lws/${DEPLOY_NAME}-decode" --timeout="${stuck_check_interval}s" 2>/dev/null; then
+      break
+    fi
+
+    elapsed=$((elapsed + stuck_check_interval))
+
+    # Check for stuck ContainerCreating pods
+    local stuck_info
+    if stuck_info=$(check_stuck_pods $stuck_timeout); then
+      : # no stuck pods
+    else
+      log "FAIL: pods stuck in ContainerCreating (likely DRA issue):"
+      echo "$stuck_info" | while read -r line; do log "  $line"; done
+      return 1
+    fi
+  done
+
+  if [ $elapsed -ge $timeout ]; then
     log "FAIL: decode LWS not ready after ${timeout}s"
     return 1
   fi
 
   if $KN get lws "${DEPLOY_NAME}-prefill" &>/dev/null; then
     log "Waiting for prefill LWS readiness..."
-    if ! $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
-      "lws/${DEPLOY_NAME}-prefill" --timeout="${timeout}s"; then
+    while [ $elapsed -lt $timeout ]; do
+      if $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
+        "lws/${DEPLOY_NAME}-prefill" --timeout="${stuck_check_interval}s" 2>/dev/null; then
+        break
+      fi
+
+      elapsed=$((elapsed + stuck_check_interval))
+
+      local stuck_info
+      if stuck_info=$(check_stuck_pods $stuck_timeout); then
+        :
+      else
+        log "FAIL: pods stuck in ContainerCreating (likely DRA issue):"
+        echo "$stuck_info" | while read -r line; do log "  $line"; done
+        return 1
+      fi
+    done
+
+    if [ $elapsed -ge $timeout ]; then
       log "FAIL: prefill LWS not ready after ${timeout}s"
       return 1
     fi
