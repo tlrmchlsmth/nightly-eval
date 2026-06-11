@@ -118,14 +118,13 @@ CORDONED_NODES=()
 
 fix_stuck_pods() {
   local stuck_pods
-  stuck_pods=$($KN get events --field-selector reason=FailedPrepareDynamicResources -o json 2>/dev/null \
-    | jq -r '.items[] | "\(.involvedObject.name)"' 2>/dev/null \
+  stuck_pods=$($KN get events --field-selector reason=FailedPrepareDynamicResources \
+    -o jsonpath='{range .items[*]}{.involvedObject.name}{"\n"}{end}' 2>/dev/null \
     | sort -u)
 
   [ -z "$stuck_pods" ] && return 1
 
   for pod in $stuck_pods; do
-    # Only act on pods that still exist and are stuck
     local node
     node=$($KN get pod "$pod" -o jsonpath='{.spec.nodeName}' 2>/dev/null) || continue
     [ -z "$node" ] && continue
