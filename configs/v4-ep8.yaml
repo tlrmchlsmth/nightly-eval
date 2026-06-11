@@ -5,7 +5,7 @@ decode:
   lws_size: 2
   tp_size: 1
   max_tokens: 512
-  extra_args: ""
+  extra_args: "--moe-backend deep_gemm_mega_moe"
 prefill:
   replicas: 1
   tp_size: 1
