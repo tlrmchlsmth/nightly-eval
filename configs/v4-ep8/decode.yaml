@@ -23,6 +23,7 @@ spec:
           llm-d.ai/model: DeepSeek-V4-Pro
           llm-d.ai/role: decode
           llm-d.ai/deployment: pd
+          llm-d.ai/owner: nightly
       spec:
         serviceAccountName: nightly-deepseek-v4
         terminationGracePeriodSeconds: 0
