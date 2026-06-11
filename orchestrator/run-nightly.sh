@@ -74,8 +74,10 @@ deploy_serving() {
   log "Deploying $config_name"
   log "  Image: $VLLM_IMAGE"
 
-  # Apply manifests with image substitution
-  sed "s|VLLM_IMAGE_PLACEHOLDER|$VLLM_IMAGE|g" "$config_dir"/*.yaml | $KN apply -f -
+  # Apply K8s manifests with image substitution (skip config.yaml)
+  cat "$config_dir"/serviceAccount.yaml "$config_dir"/decode.yaml "$config_dir"/prefill.yaml \
+    | sed "s|VLLM_IMAGE_PLACEHOLDER|$VLLM_IMAGE|g" \
+    | $KN apply -f -
 
   # Gateway + HTTPRoute
   export DEPLOY_NAME
