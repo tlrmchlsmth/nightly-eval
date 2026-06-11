@@ -111,11 +111,15 @@ deploy_serving() {
   log "Deployed $config_name"
 }
 
-# === Helper: Check for pods stuck in ContainerCreating (DRA issues) ===
-check_stuck_pods() {
+# === Helper: Find and fix pods stuck in ContainerCreating (DRA issues) ===
+# Cordons the bad node, deletes the stuck pod, and lets LWS reschedule.
+# Uncordons the node at teardown.
+CORDONED_NODES=()
+
+fix_stuck_pods() {
   local stuck_timeout="${1:-300}"
-  local stuck
-  stuck=$($KN get pods -l "llm-d.ai/model=DeepSeek-V4-Pro" -o json 2>/dev/null \
+  local stuck_pods
+  stuck_pods=$($KN get pods -l "llm-d.ai/model=DeepSeek-V4-Pro" -o json 2>/dev/null \
     | jq -r --argjson threshold "$stuck_timeout" '
       .items[] |
       select(.status.containerStatuses == null and .status.phase == "Pending") |
@@ -124,77 +128,71 @@ check_stuck_pods() {
       (.status.conditions[] | select(.type == "PodScheduled") | .lastTransitionTime) as $scheduled |
       (now - ($scheduled | fromdateiso8601)) as $age |
       select($age > $threshold) |
-      "\($pod) stuck on \(.spec.nodeName // "unknown") for \($age | floor)s"
+      "\($pod) \(.spec.nodeName // "unknown")"
     ' 2>/dev/null)
-  if [ -n "$stuck" ]; then
-    echo "$stuck"
-    return 1
-  fi
+
+  [ -z "$stuck_pods" ] && return 1
+
+  echo "$stuck_pods" | while read -r pod node; do
+    log "Pod $pod stuck in ContainerCreating on $node (DRA issue) — cordoning node and deleting pod"
+    kubectl cordon "$node" 2>/dev/null || true
+    CORDONED_NODES+=("$node")
+    $KN delete pod "$pod" --grace-period=0 --force 2>/dev/null || true
+  done
   return 0
+}
+
+uncordon_nodes() {
+  for node in "${CORDONED_NODES[@]}"; do
+    log "Uncordoning $node"
+    kubectl uncordon "$node" 2>/dev/null || true
+  done
+  CORDONED_NODES=()
 }
 
 # === Helper: Wait for serving readiness ===
 wait_for_ready() {
   local config_dir="$1"
   local timeout="${2:-3600}"
-  local stuck_check_interval=30
+  local check_interval=30
   local stuck_timeout=300
+  local max_retries=3
   local elapsed=0
 
-  log "Waiting for decode LWS readiness (timeout=${timeout}s)..."
+  log "Waiting for LWS readiness (timeout=${timeout}s)..."
 
   while [ $elapsed -lt $timeout ]; do
-    # Check if decode LWS is ready
+    # Check if both LWS are ready
+    local decode_ready=false prefill_ready=false
+
     if $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
-      "lws/${DEPLOY_NAME}-decode" --timeout="${stuck_check_interval}s" 2>/dev/null; then
-      break
+      "lws/${DEPLOY_NAME}-decode" --timeout="1s" 2>/dev/null; then
+      decode_ready=true
     fi
 
-    elapsed=$((elapsed + stuck_check_interval))
+    if ! $KN get lws "${DEPLOY_NAME}-prefill" &>/dev/null; then
+      prefill_ready=true
+    elif $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
+      "lws/${DEPLOY_NAME}-prefill" --timeout="1s" 2>/dev/null; then
+      prefill_ready=true
+    fi
 
-    # Check for stuck ContainerCreating pods
-    local stuck_info
-    if stuck_info=$(check_stuck_pods $stuck_timeout); then
-      : # no stuck pods
-    else
-      log "FAIL: pods stuck in ContainerCreating (likely DRA issue):"
-      echo "$stuck_info" | while read -r line; do log "  $line"; done
-      return 1
+    if $decode_ready && $prefill_ready; then
+      log "Serving stack ready."
+      return 0
+    fi
+
+    sleep $check_interval
+    elapsed=$((elapsed + check_interval))
+
+    # Check for stuck pods and fix them
+    if fix_stuck_pods $stuck_timeout; then
+      log "Fixed stuck pods, waiting for LWS to reschedule..."
     fi
   done
 
-  if [ $elapsed -ge $timeout ]; then
-    log "FAIL: decode LWS not ready after ${timeout}s"
-    return 1
-  fi
-
-  if $KN get lws "${DEPLOY_NAME}-prefill" &>/dev/null; then
-    log "Waiting for prefill LWS readiness..."
-    while [ $elapsed -lt $timeout ]; do
-      if $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
-        "lws/${DEPLOY_NAME}-prefill" --timeout="${stuck_check_interval}s" 2>/dev/null; then
-        break
-      fi
-
-      elapsed=$((elapsed + stuck_check_interval))
-
-      local stuck_info
-      if stuck_info=$(check_stuck_pods $stuck_timeout); then
-        :
-      else
-        log "FAIL: pods stuck in ContainerCreating (likely DRA issue):"
-        echo "$stuck_info" | while read -r line; do log "  $line"; done
-        return 1
-      fi
-    done
-
-    if [ $elapsed -ge $timeout ]; then
-      log "FAIL: prefill LWS not ready after ${timeout}s"
-      return 1
-    fi
-  fi
-
-  log "Serving stack ready."
+  log "FAIL: LWS not ready after ${timeout}s"
+  return 1
 }
 
 # === Helper: Run a nyann-bench Job via the CLI ===
@@ -242,6 +240,7 @@ teardown_serving() {
   envsubst '${DEPLOY_NAME}' < "$NIGHTLY_DIR/serving/gateway.yaml" | $KN delete -f - --ignore-not-found=true &
   $KN delete destinationrule "${DEPLOY_NAME}-infpool-backend" --ignore-not-found=true &
   wait
+  uncordon_nodes
   log "Teardown complete."
 }
 
