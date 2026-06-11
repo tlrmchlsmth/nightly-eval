@@ -91,9 +91,8 @@ spec:
                   --data-parallel-start-rank $START_RANK \
                   --kv_transfer_config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail"}' \
                   --moe-backend deep_gemm_mega_moe \
-                  --enforce-eager \
-                  --max-num-batched-tokens 32768 \
                   --block-size 256 \
+                  --attention_config.use_fp4_indexer_cache=True \
                   --no-disable-hybrid-kv-cache-manager \
                   --no-async-scheduling \
                   --enable-sleep-mode \
