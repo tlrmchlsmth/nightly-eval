@@ -75,7 +75,7 @@ deploy_serving() {
   log "  Image: $VLLM_IMAGE"
 
   # Apply K8s manifests with image substitution (skip config.yaml)
-  cat "$config_dir"/serviceAccount.yaml "$config_dir"/decode.yaml "$config_dir"/prefill.yaml \
+  { cat "$config_dir"/serviceAccount.yaml; echo "---"; cat "$config_dir"/decode.yaml; echo "---"; cat "$config_dir"/prefill.yaml; } \
     | sed "s|VLLM_IMAGE_PLACEHOLDER|$VLLM_IMAGE|g" \
     | $KN apply -f -
 
