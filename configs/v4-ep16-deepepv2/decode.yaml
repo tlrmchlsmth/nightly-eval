@@ -1,11 +1,13 @@
 apiVersion: leaderworkerset.x-k8s.io/v1
 kind: LeaderWorkerSet
 metadata:
-  name: wide-ep-decode
+  name: nightly-wide-ep-decode
   labels:
+    kueue.x-k8s.io/queue-name: nightly-eval
     llm-d.ai/inference-serving: "true"
     llm-d.ai/model: DeepSeek-V4-Pro
     llm-d.ai/role: decode
+    llm-d.ai/deployment: pd
 spec:
   replicas: 1
   rolloutStrategy:
@@ -13,17 +15,16 @@ spec:
     rollingUpdateConfiguration:
       maxUnavailable: 100%
   leaderWorkerTemplate:
-    size: 2
+    size: 4
     workerTemplate:
       metadata:
         labels:
-          llm-d.ai/deploy-ts: DEPLOY_TS_PLACEHOLDER
           llm-d.ai/inference-serving: "true"
           llm-d.ai/model: DeepSeek-V4-Pro
-          llm-d.ai/owner: OWNER_PLACEHOLDER
           llm-d.ai/role: decode
+          llm-d.ai/deployment: pd
       spec:
-        serviceAccountName: deepseek-v4
+        serviceAccountName: nightly-deepseek-v4
         terminationGracePeriodSeconds: 0
         nodeSelector:
           oci.oraclecloud.com/rack-name: oci-bth-aiaccelerator-prd005-hpc-rack-1
@@ -92,36 +93,23 @@ spec:
             args:
               - |-
                 set -euo pipefail
-                LOG_DIR=LUSTRE_PREFIX_PLACEHOLDER/logs/decode
+                LOG_DIR=/mnt/lustre/nightly/logs/decode
                 mkdir -p "$LOG_DIR"
                 LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
                 exec > >(tee -a "$LOG_FILE") 2>&1
                 echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
 
-                FORK_REPO="FORK_REPO_PLACEHOLDER"
-                FORK_BRANCH="FORK_BRANCH_PLACEHOLDER"
-                if [ -n "$FORK_BRANCH" ] && [ -d /opt/vllm-source ]; then
-                  cd /opt/vllm-source
-                  git remote add fork "$FORK_REPO" 2>/dev/null || git remote set-url fork "$FORK_REPO"
-                  git fetch fork "$FORK_BRANCH"
-                  git checkout "fork/$FORK_BRANCH"
-                  echo "=== Checked out fork/$FORK_BRANCH at $(date) ==="
-                  cd -
-                fi
-
                 uv pip install --system --force-reinstall --no-deps nvidia-cutlass-dsl-libs-cu13==4.5.2
 
-                if [ -n "${NVSHMEM_CUMEM_HANDLE_TYPE:-}" ]; then
-                  export NVSHMEM_QP_DEPTH=$((MAX_TOKENS * 2 + 2))
-                  pip install --upgrade --no-build-isolation nvidia-nccl-cu13
-                  NCCL_LIB=$(python3 -c "import nvidia.nccl; print(nvidia.nccl.__path__[0])")/lib
-                  export LD_LIBRARY_PATH="${NCCL_LIB}:${LD_LIBRARY_PATH:-}"
-                  echo "Installed NCCL from PyPI, lib at $NCCL_LIB"
-                fi
+                export NVSHMEM_QP_DEPTH=$((256 * 2 + 2))
+                pip install --upgrade --no-build-isolation nvidia-nccl-cu13
+                NCCL_LIB=$(python3 -c "import nvidia.nccl; print(nvidia.nccl.__path__[0])")/lib
+                export LD_LIBRARY_PATH="${NCCL_LIB}:${LD_LIBRARY_PATH:-}"
+                echo "Installed NCCL from PyPI, lib at $NCCL_LIB"
 
                 find /dev/shm -type f -delete
 
-                START_RANK=$(( ${LWS_WORKER_INDEX:-0} * DP_SIZE_LOCAL ))
+                START_RANK=$(( ${LWS_WORKER_INDEX:-0} * 4 ))
 
                 exec vllm serve \
                   deepseek-ai/DeepSeek-V4-Pro \
@@ -135,16 +123,17 @@ spec:
                   --enable-expert-parallel \
                   --enable-ep-weight-filter \
                   --enable-cumem-allocator \
-                  --tensor-parallel-size $TP_SIZE \
-                  --data-parallel-size $((LWS_GROUP_SIZE * DP_SIZE_LOCAL)) \
-                  --data-parallel-size-local $DP_SIZE_LOCAL \
+                  --tensor-parallel-size 1 \
+                  --data-parallel-size $((LWS_GROUP_SIZE * 4)) \
+                  --data-parallel-size-local 4 \
                   --data-parallel-address ${LWS_LEADER_ADDRESS} \
                   --data-parallel-rpc-port 5555 \
                   --data-parallel-start-rank $START_RANK \
                   --kv_transfer_config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail"}' \
-                  --max-num-batched-tokens $MAX_TOKENS \
-                  --max-num-seqs $MAX_TOKENS \
-                  --max-cudagraph-capture-size $MAX_TOKENS \
+                  --all2all-backend deepep_v2 \
+                  --max-num-batched-tokens 256 \
+                  --max-num-seqs 256 \
+                  --max-cudagraph-capture-size 256 \
                   --block-size 256 \
                   --no-disable-hybrid-kv-cache-manager \
                   --enable-sleep-mode \
@@ -154,13 +143,6 @@ spec:
                   --enable-force-include-usage
 
             env:
-              - name: MAX_TOKENS
-                value: "512"
-              - name: DP_SIZE_LOCAL
-                value: "4"
-              - name: TP_SIZE
-                value: "1"
-
               - name: HF_TOKEN
                 valueFrom:
                   secretKeyRef:
@@ -169,8 +151,6 @@ spec:
                     optional: true
               - name: HF_HOME
                 value: /mnt/local/hf_cache
-
-
               - name: TRITON_LIBCUDA_PATH
                 value: /usr/lib64
               - name: VLLM_SKIP_P2P_CHECK
@@ -183,7 +163,6 @@ spec:
                 value: enabled
               - name: TILELANG_CLEANUP_TEMP_FILES
                 value: "1"
-
               - name: NCCL_MNNVL_ENABLE
                 value: "1"
               - name: NCCL_NVLS_ENABLE
@@ -196,25 +175,30 @@ spec:
                 value: "1"
               - name: TORCH_SYMMMEM
                 value: NVSHMEM
-
               - name: UCX_NET_DEVICES
                 value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
-
               - name: GLOO_SOCKET_IFNAME
                 value: eth0
               - name: NCCL_SOCKET_IFNAME
                 value: eth0
-
               - name: VLLM_NIXL_SIDE_CHANNEL_HOST
                 valueFrom:
                   fieldRef:
                     fieldPath: status.podIP
-
               - name: VLLM_ENGINE_READY_TIMEOUT_S
                 value: "1800"
               - name: VLLM_LOGGING_LEVEL
                 value: INFO
-
+              - name: NVSHMEM_CUMEM_HANDLE_TYPE
+                value: FABRIC
+              - name: NVSHMEM_DISABLE_CUDA_VMM
+                value: "0"
+              - name: VLLM_DEEPEP_LOW_LATENCY_USE_MNNVL
+                value: "1"
+              - name: VLLM_DEEPEP_BUFFER_SIZE_MB
+                value: "0"
+              - name: DEEPEP_METRICS_ENABLED
+                value: "1"
             ports:
               - containerPort: 8200
                 name: modelserver

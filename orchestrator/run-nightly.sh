@@ -3,15 +3,15 @@
 # Self-contained nightly eval orchestrator.
 # Runs entirely in-cluster via CronJob — no external repo dependencies.
 #
-# Loops over config YAMLs, deploying each serving config, running benchmarks,
-# and collecting results to Lustre.
+# Each config is a directory under configs/ containing fully self-contained
+# K8s manifests (decode.yaml, prefill.yaml, serviceAccount.yaml) and a
+# config.yaml with sweep parameters.
 #
 set -euo pipefail
 
 # === Configuration ===
 NAMESPACE="${NAMESPACE:-vllm}"
 DEPLOY_NAME="${DEPLOY_NAME:-nightly-wide-ep}"
-OWNER="${OWNER:-nightly}"
 VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:nightly}"
 LUSTRE_PREFIX="${LUSTRE_PREFIX:-/mnt/lustre/nightly}"
 NIGHTLY_DIR="${NIGHTLY_DIR:-.}"
@@ -55,7 +55,6 @@ ensure_datasets() {
     sharegpt_json=$(mktemp)
     curl -fSL -o "$sharegpt_json" \
       "https://huggingface.co/datasets/anon8231489123/ShareGPT_Vicuna_unfiltered/resolve/main/ShareGPT_V3_unfiltered_cleaned_split.json"
-    # Extract conversation text into flat file for corpus workload
     jq -r '.[].conversations[]?.value // empty' "$sharegpt_json" > "$sharegpt"
     rm -f "$sharegpt_json"
   fi
@@ -68,71 +67,24 @@ ensure_datasets() {
 
 # === Helper: Deploy serving stack for one config ===
 deploy_serving() {
-  local config_file="$1"
-  local config_name mode deploy_ts rendered
-  config_name=$(yq '.name' "$config_file")
-  mode=$(yq '.mode // "pd"' "$config_file")
-  deploy_ts=$(date +%Y%m%d-%H%M%S)
+  local config_dir="$1"
+  local config_name
+  config_name=$(yq '.name' "$config_dir/config.yaml")
 
-  local decode_lws_size decode_tp_size decode_max_tokens decode_extra_args
-  decode_lws_size=$(yq '.decode.lws_size' "$config_file")
-  decode_tp_size=$(yq '.decode.tp_size' "$config_file")
-  decode_max_tokens=$(yq '.decode.max_tokens' "$config_file")
-  decode_extra_args=$(yq '.decode.extra_args // ""' "$config_file")
-
-  log "Deploying $config_name (mode=$mode)"
-  log "  Decode: lws_size=$decode_lws_size tp=$decode_tp_size max_tokens=$decode_max_tokens"
+  log "Deploying $config_name"
   log "  Image: $VLLM_IMAGE"
 
-  # Render kustomize for selected mode
-  rendered=$(mktemp)
-  kubectl kustomize --load-restrictor=LoadRestrictionsNone "$NIGHTLY_DIR/serving/$mode" \
-    | sed -e "s/DEPLOY_TS_PLACEHOLDER/$deploy_ts/g" \
-          -e "s/OWNER_PLACEHOLDER/$OWNER/g" \
-          -e "s|LUSTRE_PREFIX_PLACEHOLDER|$LUSTRE_PREFIX|g" \
-          -e "s|VLLM_IMAGE_PLACEHOLDER|$VLLM_IMAGE|g" \
-          -e "s|FORK_REPO_PLACEHOLDER||g" \
-          -e "s|FORK_BRANCH_PLACEHOLDER||g" \
-    > "$rendered"
-
-  # Decode LWS overrides
-  yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.size) = $decode_lws_size" "$rendered"
-  yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"TP_SIZE\") | .value) = \"$decode_tp_size\"" "$rendered"
-  yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"MAX_TOKENS\") | .value) = \"$decode_max_tokens\"" "$rendered"
-
-  local dp_size_local=$((4 / decode_tp_size))
-  yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"DP_SIZE_LOCAL\") | .value) = \"$dp_size_local\"" "$rendered"
-
-  # Prefill LWS overrides (pd-like modes)
-  if [[ "$mode" == pd* ]]; then
-    local prefill_replicas prefill_tp_size
-    prefill_replicas=$(yq '.prefill.replicas' "$config_file")
-    prefill_tp_size=$(yq '.prefill.tp_size // 1' "$config_file")
-    log "  Prefill: replicas=$prefill_replicas tp=$prefill_tp_size"
-    yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"prefill\"))) | .spec.replicas) = $prefill_replicas" "$rendered"
-    yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"prefill\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"TP_SIZE\") | .value) = \"$prefill_tp_size\"" "$rendered"
-    local prefill_dp_local=$((4 / prefill_tp_size))
-    yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"prefill\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"DP_SIZE_LOCAL\") | .value) = \"$prefill_dp_local\"" "$rendered"
-  fi
-
-  # Extra vLLM args
-  if [ -n "$decode_extra_args" ]; then
-    log "  Extra args: $decode_extra_args"
-    yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].args[0]) |= sub(\"exec vllm serve\"; \"exec vllm serve $decode_extra_args\")" "$rendered"
-  fi
-
-  $KN apply -f "$rendered"
-  rm -f "$rendered"
+  # Apply manifests with image substitution
+  sed "s|VLLM_IMAGE_PLACEHOLDER|$VLLM_IMAGE|g" "$config_dir"/*.yaml | $KN apply -f -
 
   # Gateway + HTTPRoute
   export DEPLOY_NAME
   envsubst '${DEPLOY_NAME}' < "$NIGHTLY_DIR/serving/gateway.yaml" | $KN apply -f -
 
   # InferencePool via Helm
-  local infpool_mode="$mode"
-  [[ "$infpool_mode" == pd-* ]] && infpool_mode="pd"
-  export OWNER
-  envsubst '${DEPLOY_NAME} ${OWNER}' < "$NIGHTLY_DIR/serving/inferencepool-${infpool_mode}.values.yaml" > /tmp/nightly-infpool-values.yaml
+  local owner="nightly"
+  export OWNER="$owner"
+  envsubst '${DEPLOY_NAME} ${OWNER}' < "$NIGHTLY_DIR/serving/inferencepool-pd.values.yaml" > /tmp/nightly-infpool-values.yaml
   helm upgrade --install "${DEPLOY_NAME}-infpool" "$INFPOOL_CHART" \
     --version "$INFPOOL_VERSION" \
     -f /tmp/nightly-infpool-values.yaml \
@@ -159,10 +111,8 @@ deploy_serving() {
 
 # === Helper: Wait for serving readiness ===
 wait_for_ready() {
-  local config_file="$1"
-  local mode timeout
-  mode=$(yq '.mode // "pd"' "$config_file")
-  timeout="${2:-3600}"
+  local config_dir="$1"
+  local timeout="${2:-3600}"
 
   log "Waiting for decode LWS readiness (timeout=${timeout}s)..."
   if ! $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
@@ -171,7 +121,7 @@ wait_for_ready() {
     return 1
   fi
 
-  if [[ "$mode" == pd* ]]; then
+  if $KN get lws "${DEPLOY_NAME}-prefill" &>/dev/null; then
     log "Waiting for prefill LWS readiness..."
     if ! $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
       "lws/${DEPLOY_NAME}-prefill" --timeout="${timeout}s"; then
@@ -202,7 +152,6 @@ run_bench() {
 }
 
 # === Helper: Collect JSON results from a completed Job ===
-# With --json, nyann-bench outputs only the JSON summary to stdout.
 collect_results() {
   local job_name="$1"
   local pods
@@ -234,16 +183,16 @@ teardown_serving() {
 
 # === Helper: Run staircase benchmark ===
 run_staircase() {
-  local config_file="$1" run_dir="$2"
-  local config_name base_url
-  config_name=$(yq '.name' "$config_file")
-  base_url="http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local/v1"
+  local config_dir="$1" run_dir="$2"
+  local config_name
+  config_name=$(yq '.name' "$config_dir/config.yaml")
+  local base_url="http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local/v1"
 
   local sweep_min sweep_max sweep_steps step_duration
-  sweep_min=$(yq '.sweep.min // 128' "$config_file")
-  sweep_max=$(yq '.sweep.max // 2048' "$config_file")
-  sweep_steps=$(yq '.sweep.steps // 5' "$config_file")
-  step_duration=$(yq '.sweep.step_duration // "45s"' "$config_file")
+  sweep_min=$(yq '.sweep.min // 128' "$config_dir/config.yaml")
+  sweep_max=$(yq '.sweep.max // 2048' "$config_dir/config.yaml")
+  sweep_steps=$(yq '.sweep.steps // 5' "$config_dir/config.yaml")
+  step_duration=$(yq '.sweep.step_duration // "45s"' "$config_dir/config.yaml")
 
   local bench_config
   bench_config="{\"warmup\":{\"duration\":\"15s\",\"stagger\":true},\"sweep\":{\"min\":$sweep_min,\"max\":$sweep_max,\"steps\":$sweep_steps,\"step_duration\":\"$step_duration\"},\"workload\":{\"type\":\"corpus\",\"isl\":500,\"osl\":1500,\"turns\":1,\"corpus_path\":\"$LUSTRE_PREFIX/corpus/sharegpt.txt\"}}"
@@ -293,25 +242,26 @@ echo "{\"vllm_image\": \"$VLLM_IMAGE\", \"start\": \"$(date -Iseconds)\", \"conf
   > "$RUN_DIR/metadata.json"
 
 FAILED=0
-for config_file in "$NIGHTLY_DIR"/configs/*.yaml; do
-  config_name=$(yq '.name' "$config_file")
-  mode=$(yq '.mode // "pd"' "$config_file")
+for config_dir in "$NIGHTLY_DIR"/configs/*/; do
+  [ ! -f "$config_dir/config.yaml" ] && continue
+
+  config_name=$(yq '.name' "$config_dir/config.yaml")
   config_start=$(date -Iseconds)
 
   log ""
   log "=========================================="
-  log "  Config: $config_name (mode=$mode)"
+  log "  Config: $config_name"
   log "=========================================="
 
   # Deploy
-  if ! deploy_serving "$config_file"; then
+  if ! deploy_serving "$config_dir"; then
     log "FAIL: deploy $config_name"
     FAILED=$((FAILED + 1))
     teardown_serving || true
     continue
   fi
 
-  if ! wait_for_ready "$config_file"; then
+  if ! wait_for_ready "$config_dir"; then
     log "FAIL: readiness $config_name (timeout)"
     FAILED=$((FAILED + 1))
     teardown_serving || true
@@ -323,7 +273,7 @@ for config_file in "$NIGHTLY_DIR"/configs/*.yaml; do
     || log "WARN: gsm8k-pre failed for $config_name"
 
   # Staircase
-  run_staircase "$config_file" "$RUN_DIR" \
+  run_staircase "$config_dir" "$RUN_DIR" \
     || log "WARN: staircase failed for $config_name"
 
   # GSM8K post-eval
@@ -331,15 +281,19 @@ for config_file in "$NIGHTLY_DIR"/configs/*.yaml; do
     || log "WARN: gsm8k-post failed for $config_name"
 
   # Record config result
-  if [[ "$mode" == pd* ]]; then
-    num_gpus=$(yq '(.decode.lws_size * 4) + (.prefill.replicas * 4)' "$config_file")
-  else
-    num_gpus=$(yq '.decode.lws_size * 4' "$config_file")
+  # Count GPUs from LWS manifests
+  local decode_gpus prefill_gpus
+  decode_gpus=$(yq '.spec.leaderWorkerTemplate.size * 4' "$config_dir/decode.yaml")
+  prefill_gpus=0
+  if [ -f "$config_dir/prefill.yaml" ]; then
+    prefill_gpus=$(yq '.spec.replicas * .spec.leaderWorkerTemplate.size * 4' "$config_dir/prefill.yaml")
   fi
+  num_gpus=$((decode_gpus + prefill_gpus))
+
   config_end=$(date -Iseconds)
-  jq --arg name "$config_name" --arg mode "$mode" --argjson gpus "$num_gpus" \
+  jq --arg name "$config_name" --argjson gpus "$num_gpus" \
      --arg start "$config_start" --arg end "$config_end" \
-     '.configs += [{name: $name, mode: $mode, num_gpus: $gpus, start: $start, end: $end}]' \
+     '.configs += [{name: $name, num_gpus: $gpus, start: $start, end: $end}]' \
      "$RUN_DIR/metadata.json" > "$RUN_DIR/metadata.tmp" && mv "$RUN_DIR/metadata.tmp" "$RUN_DIR/metadata.json"
 
   # Teardown

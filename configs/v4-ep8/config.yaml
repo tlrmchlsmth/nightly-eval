@@ -1,0 +1,7 @@
+name: v4-ep8
+description: "EP8 decode (2 pods x 4 GPUs), P/D disaggregated, MegaMoE, DeepSeek-V4-Pro"
+sweep:
+  min: 64
+  max: 512
+  steps: 5
+  step_duration: "180s"
