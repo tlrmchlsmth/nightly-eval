@@ -12,7 +12,7 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-vllm}"
 DEPLOY_NAME="${DEPLOY_NAME:-nightly-wide-ep}"
 OWNER="${OWNER:-nightly}"
-VLLM_IMAGE="${VLLM_IMAGE:-ghcr.io/tlrmchlsmth/llm-d-cuda-dev:2323091}"
+VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:nightly}"
 LUSTRE_PREFIX="${LUSTRE_PREFIX:-/mnt/lustre/nightly}"
 NIGHTLY_DIR="${NIGHTLY_DIR:-.}"
 
@@ -100,28 +100,25 @@ deploy_serving() {
   yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"TP_SIZE\") | .value) = \"$decode_tp_size\"" "$rendered"
   yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"MAX_TOKENS\") | .value) = \"$decode_max_tokens\"" "$rendered"
 
-  # Agg mode: strip --kv_transfer_config from vllm serve command (no KV transfer in agg)
-  # and set empty env vars to satisfy set -u in the entrypoint script
-  if [ "$mode" = "agg" ]; then
-    yq -i '(select(.kind == "LeaderWorkerSet" and (.metadata.name | test("decode"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].args[0]) |= sub(" *--kv_transfer_config[^\n]*\n"; "")' "$rendered"
-    yq -i '(select(.kind == "LeaderWorkerSet" and (.metadata.name | test("decode"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env) += [{"name": "KV_TRANSFER_CONFIG", "value": ""}]' "$rendered"
-    yq -i '(select(.kind == "LeaderWorkerSet" and (.metadata.name | test("decode"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env) += [{"name": "VLLM_NIXL_SIDE_CHANNEL_HOST", "value": ""}]' "$rendered"
-  fi
+  local dp_size_local=$((4 / decode_tp_size))
+  yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"DP_SIZE_LOCAL\") | .value) = \"$dp_size_local\"" "$rendered"
 
-  # Prefill LWS overrides (pd mode only)
-  if [ "$mode" = "pd" ]; then
+  # Prefill LWS overrides (pd-like modes)
+  if [[ "$mode" == pd* ]]; then
     local prefill_replicas prefill_tp_size
     prefill_replicas=$(yq '.prefill.replicas' "$config_file")
     prefill_tp_size=$(yq '.prefill.tp_size // 1' "$config_file")
     log "  Prefill: replicas=$prefill_replicas tp=$prefill_tp_size"
     yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"prefill\"))) | .spec.replicas) = $prefill_replicas" "$rendered"
     yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"prefill\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"TP_SIZE\") | .value) = \"$prefill_tp_size\"" "$rendered"
+    local prefill_dp_local=$((4 / prefill_tp_size))
+    yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"prefill\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].env[] | select(.name == \"DP_SIZE_LOCAL\") | .value) = \"$prefill_dp_local\"" "$rendered"
   fi
 
   # Extra vLLM args
   if [ -n "$decode_extra_args" ]; then
     log "  Extra args: $decode_extra_args"
-    yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].args[0]) |= sub(\"vllm serve\"; \"vllm serve $decode_extra_args\")" "$rendered"
+    yq -i "(select(.kind == \"LeaderWorkerSet\" and (.metadata.name | test(\"decode\"))) | .spec.leaderWorkerTemplate.workerTemplate.spec.containers[0].args[0]) |= sub(\"exec vllm serve\"; \"exec vllm serve $decode_extra_args\")" "$rendered"
   fi
 
   $KN apply -f "$rendered"
@@ -132,8 +129,10 @@ deploy_serving() {
   envsubst '${DEPLOY_NAME}' < "$NIGHTLY_DIR/serving/gateway.yaml" | $KN apply -f -
 
   # InferencePool via Helm
+  local infpool_mode="$mode"
+  [[ "$infpool_mode" == pd-* ]] && infpool_mode="pd"
   export OWNER
-  envsubst '${DEPLOY_NAME} ${OWNER}' < "$NIGHTLY_DIR/serving/inferencepool-${mode}.values.yaml" > /tmp/nightly-infpool-values.yaml
+  envsubst '${DEPLOY_NAME} ${OWNER}' < "$NIGHTLY_DIR/serving/inferencepool-${infpool_mode}.values.yaml" > /tmp/nightly-infpool-values.yaml
   helm upgrade --install "${DEPLOY_NAME}-infpool" "$INFPOOL_CHART" \
     --version "$INFPOOL_VERSION" \
     -f /tmp/nightly-infpool-values.yaml \
@@ -163,7 +162,7 @@ wait_for_ready() {
   local config_file="$1"
   local mode timeout
   mode=$(yq '.mode // "pd"' "$config_file")
-  timeout="${2:-1800}"
+  timeout="${2:-3600}"
 
   log "Waiting for decode LWS readiness (timeout=${timeout}s)..."
   if ! $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
@@ -172,7 +171,7 @@ wait_for_ready() {
     return 1
   fi
 
-  if [ "$mode" = "pd" ]; then
+  if [[ "$mode" == pd* ]]; then
     log "Waiting for prefill LWS readiness..."
     if ! $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
       "lws/${DEPLOY_NAME}-prefill" --timeout="${timeout}s"; then
@@ -332,7 +331,7 @@ for config_file in "$NIGHTLY_DIR"/configs/*.yaml; do
     || log "WARN: gsm8k-post failed for $config_name"
 
   # Record config result
-  if [ "$mode" = "pd" ]; then
+  if [[ "$mode" == pd* ]]; then
     num_gpus=$(yq '(.decode.lws_size * 4) + (.prefill.replicas * 4)' "$config_file")
   else
     num_gpus=$(yq '.decode.lws_size * 4' "$config_file")

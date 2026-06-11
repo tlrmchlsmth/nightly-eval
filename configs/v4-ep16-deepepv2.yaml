@@ -1,0 +1,16 @@
+name: v4-ep16-deepepv2
+description: "EP16 decode (4 pods x 4 GPUs), P/D, DeepEPv2 all2all, DeepSeek-V4-Pro"
+mode: pd-deepepv2
+decode:
+  lws_size: 4
+  tp_size: 1
+  max_tokens: 256
+  extra_args: "--all2all-backend deepep_v2"
+prefill:
+  replicas: 1
+  tp_size: 1
+sweep:
+  min: 64
+  max: 512
+  steps: 5
+  step_duration: "180s"

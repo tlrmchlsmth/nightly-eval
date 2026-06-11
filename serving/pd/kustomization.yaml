@@ -9,7 +9,7 @@ patches:
     target:
       kind: LeaderWorkerSet
 
-  # P/D disaggregated mode: deployment label + KV transfer config
+  # P/D disaggregated mode: deployment label
   - target:
       kind: LeaderWorkerSet
     patch: |-
@@ -19,15 +19,3 @@ patches:
       - op: add
         path: /spec/leaderWorkerTemplate/workerTemplate/metadata/labels/llm-d.ai~1deployment
         value: pd
-      - op: add
-        path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/-
-        value:
-          name: KV_TRANSFER_CONFIG
-          value: '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_buffer_device":"cuda","kv_load_failure_policy":"fail"}'
-      - op: add
-        path: /spec/leaderWorkerTemplate/workerTemplate/spec/containers/0/env/-
-        value:
-          name: VLLM_NIXL_SIDE_CHANNEL_HOST
-          valueFrom:
-            fieldRef:
-              fieldPath: status.podIP

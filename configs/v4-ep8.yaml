@@ -1,0 +1,16 @@
+name: v4-ep8
+description: "EP8 decode (2 pods x 4 GPUs), P/D disaggregated, DeepSeek-V4-Pro"
+mode: pd
+decode:
+  lws_size: 2
+  tp_size: 1
+  max_tokens: 512
+  extra_args: ""
+prefill:
+  replicas: 1
+  tp_size: 1
+sweep:
+  min: 64
+  max: 512
+  steps: 5
+  step_duration: "180s"
