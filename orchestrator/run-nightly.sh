@@ -117,24 +117,20 @@ deploy_serving() {
 CORDONED_NODES=()
 
 fix_stuck_pods() {
-  local stuck_timeout="${1:-300}"
   local stuck_pods
-  stuck_pods=$($KN get pods -l "llm-d.ai/model=DeepSeek-V4-Pro" -o json 2>/dev/null \
-    | jq -r --argjson threshold "$stuck_timeout" '
-      .items[] |
-      select(.status.containerStatuses == null and .status.phase == "Pending") |
-      select(.status.conditions[]? | select(.type == "PodScheduled" and .status == "True")) |
-      .metadata.name as $pod |
-      (.status.conditions[] | select(.type == "PodScheduled") | .lastTransitionTime) as $scheduled |
-      (now - ($scheduled | fromdateiso8601)) as $age |
-      select($age > $threshold) |
-      "\($pod) \(.spec.nodeName // "unknown")"
-    ' 2>/dev/null)
+  stuck_pods=$($KN get events --field-selector reason=FailedPrepareDynamicResources -o json 2>/dev/null \
+    | jq -r '.items[] | "\(.involvedObject.name)"' 2>/dev/null \
+    | sort -u)
 
   [ -z "$stuck_pods" ] && return 1
 
-  echo "$stuck_pods" | while read -r pod node; do
-    log "Pod $pod stuck in ContainerCreating on $node (DRA issue) — cordoning node and deleting pod"
+  for pod in $stuck_pods; do
+    # Only act on pods that still exist and are stuck
+    local node
+    node=$($KN get pod "$pod" -o jsonpath='{.spec.nodeName}' 2>/dev/null) || continue
+    [ -z "$node" ] && continue
+
+    log "Pod $pod hit FailedPrepareDynamicResources on $node — cordoning node and deleting pod"
     kubectl cordon "$node" 2>/dev/null || true
     CORDONED_NODES+=("$node")
     $KN delete pod "$pod" --grace-period=0 --force 2>/dev/null || true
