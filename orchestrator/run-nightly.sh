@@ -162,7 +162,7 @@ wait_for_ready() {
   local config_file="$1"
   local mode timeout
   mode=$(yq '.mode // "pd"' "$config_file")
-  timeout="${2:-1800}"
+  timeout="${2:-3600}"
 
   log "Waiting for decode LWS readiness (timeout=${timeout}s)..."
   if ! $KN wait --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
