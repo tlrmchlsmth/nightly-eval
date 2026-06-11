@@ -75,7 +75,7 @@ spec:
                   deepseek-ai/DeepSeek-V4-Pro \
                   --port 8000 \
                   --tokenizer-mode deepseek_v4 \
-                  --gpu-memory-utilization 0.95 \
+                  --gpu-memory-utilization 0.85 \
                   --trust-remote-code \
                   --api-server-count 1 \
                   --disable-uvicorn-access-log \
@@ -92,7 +92,7 @@ spec:
                   --kv_transfer_config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail"}' \
                   --moe-backend deep_gemm_mega_moe \
                   --enforce-eager \
-                  --max-model-len 8192 \
+                  --max-model-len 16384 \
                   --max-num-batched-tokens 32768 \
                   --block-size 256 \
                   --no-disable-hybrid-kv-cache-manager \
