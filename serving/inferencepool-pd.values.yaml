@@ -76,9 +76,6 @@ inferencePool:
   name: ${DEPLOY_NAME}-infpool
   targetPorts:
     - number: 8000
-    - number: 8001
-    - number: 8002
-    - number: 8003
   modelServers:
     matchLabels:
       llm-d.ai/inference-serving: "true"

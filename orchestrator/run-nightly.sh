@@ -190,6 +190,36 @@ wait_for_ready() {
   return 1
 }
 
+# === Helper: Wait for gateway to serve models ===
+wait_for_gateway() {
+  local timeout="${1:-600}"
+  local check_interval=10
+  local elapsed=0
+  local gateway_url="http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local/v1/models"
+
+  log "Waiting for gateway to serve models (timeout=${timeout}s)..."
+
+  while [ $elapsed -lt $timeout ]; do
+    local model_count
+    model_count=$(curl -s --max-time 5 "$gateway_url" 2>/dev/null \
+      | jq '.data | length' 2>/dev/null) || model_count=0
+
+    if [ "$model_count" -gt 0 ] 2>/dev/null; then
+      local model_id
+      model_id=$(curl -s --max-time 5 "$gateway_url" 2>/dev/null \
+        | jq -r '.data[0].id' 2>/dev/null) || model_id="unknown"
+      log "Gateway ready: $model_count model(s) available ($model_id)"
+      return 0
+    fi
+
+    sleep $check_interval
+    elapsed=$((elapsed + check_interval))
+  done
+
+  log "FAIL: Gateway not serving models after ${timeout}s"
+  return 1
+}
+
 # === Helper: Run a nyann-bench Job via the CLI ===
 run_bench() {
   local job_name="$1" target="$2" config_json="$3" n_workers="$4"
@@ -321,6 +351,13 @@ for config_dir in "$NIGHTLY_DIR"/configs/*/; do
 
   if ! wait_for_ready "$config_dir"; then
     log "FAIL: readiness $config_name (timeout)"
+    FAILED=$((FAILED + 1))
+    teardown_serving || true
+    continue
+  fi
+
+  if ! wait_for_gateway; then
+    log "FAIL: gateway not serving $config_name"
     FAILED=$((FAILED + 1))
     teardown_serving || true
     continue

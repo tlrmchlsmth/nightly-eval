@@ -51,21 +51,12 @@ spec:
             args:
               - --port=8000
               - --vllm-port=8200
-              - --data-parallel-size=4
+              - --data-parallel-size=1
               - --secure-proxy=false
               - --connector=nixlv2
             ports:
               - containerPort: 8000
                 name: rank0
-                protocol: TCP
-              - containerPort: 8001
-                name: rank1
-                protocol: TCP
-              - containerPort: 8002
-                name: rank2
-                protocol: TCP
-              - containerPort: 8003
-                name: rank3
                 protocol: TCP
             restartPolicy: Always
             resources:
