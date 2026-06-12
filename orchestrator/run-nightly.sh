@@ -340,7 +340,6 @@ for config_dir in "$NIGHTLY_DIR"/configs/*/; do
 
   # Record config result
   # Count GPUs from LWS manifests
-  local decode_gpus prefill_gpus
   decode_gpus=$(yq '.spec.leaderWorkerTemplate.size * 4' "$config_dir/decode.yaml")
   prefill_gpus=0
   if [ -f "$config_dir/prefill.yaml" ]; then
