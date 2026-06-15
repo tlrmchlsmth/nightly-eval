@@ -355,7 +355,8 @@ run_lm_eval() {
   mkdir -p "$output_dir"
 
   log "lm_eval: $job_name"
-  sed -e "s|GATEWAY_URL_PLACEHOLDER|$gateway_url|g" \
+  sed -e "s|JOB_NAME_PLACEHOLDER|$job_name|g" \
+      -e "s|GATEWAY_URL_PLACEHOLDER|$gateway_url|g" \
       -e "s|RESULTS_DIR_PLACEHOLDER|$output_dir|g" \
       -e "s|VLLM_IMAGE_PLACEHOLDER|$VLLM_IMAGE|g" \
       "$config_dir/lm-eval-job.yaml" | $KN apply -f -
