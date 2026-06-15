@@ -18,11 +18,19 @@ spec:
       serviceAccountName: nightly-nemotron
       restartPolicy: Never
       nodeSelector:
-        kubernetes.io/arch: amd64
+        oci.oraclecloud.com/rack-name: oci-bth-aiaccelerator-prd005-hpc-rack-1
       volumes:
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
         - name: lustre
           persistentVolumeClaim:
             claimName: lustre-pvc-vllm
+        - name: local-nvme
+          hostPath:
+            path: /mnt/numa0
+            type: Directory
       containers:
         - name: lm-eval
           image: VLLM_IMAGE_PLACEHOLDER
@@ -70,5 +78,9 @@ spec:
               cpu: 8
               memory: 16Gi
           volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
             - name: lustre
               mountPath: /mnt/lustre
+            - name: local-nvme
+              mountPath: /mnt/local
