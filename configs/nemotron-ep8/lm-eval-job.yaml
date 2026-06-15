@@ -41,8 +41,7 @@ spec:
           args:
             - |-
               set -euo pipefail
-              source /opt/vllm/bin/activate
-              uv pip install lm-eval[api]
+              uv pip install --system lm-eval[api]
 
               GATEWAY="GATEWAY_URL_PLACEHOLDER"
               echo "Waiting for gateway at $GATEWAY..."
