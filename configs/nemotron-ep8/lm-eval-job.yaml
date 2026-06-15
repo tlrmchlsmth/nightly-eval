@@ -50,7 +50,7 @@ spec:
               lm_eval \
                 --model local-completions \
                 --tasks gsm8k_cot \
-                --model_args "model=$MODEL,base_url=$GATEWAY/v1/completions,num_concurrent=2048,tokenized_requests=False" \
+                --model_args "model=$MODEL,base_url=$GATEWAY/v1/completions,num_concurrent=512,tokenized_requests=False" \
                 --batch_size auto \
                 --output_path RESULTS_DIR_PLACEHOLDER
 
