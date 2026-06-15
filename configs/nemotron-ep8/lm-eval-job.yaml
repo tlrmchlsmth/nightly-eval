@@ -66,10 +66,6 @@ spec:
               value: "/usr/local/cuda-13"
             - name: TRITON_LIBCUDA_PATH
               value: /usr/lib64
-            - name: NVIDIA_VISIBLE_DEVICES
-              value: "0"
-            - name: CUDA_VISIBLE_DEVICES
-              value: "0"
             - name: TOKENIZERS_PARALLELISM
               value: "false"
             - name: PYTHONUNBUFFERED
