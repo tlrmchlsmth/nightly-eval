@@ -62,10 +62,6 @@ spec:
               value: /mnt/local/hf_cache
             - name: HF_HUB_CACHE
               value: /mnt/local/hf_cache
-            - name: CUDA_HOME
-              value: "/usr/local/cuda-13"
-            - name: TRITON_LIBCUDA_PATH
-              value: /usr/lib64
             - name: TOKENIZERS_PARALLELISM
               value: "false"
             - name: PYTHONUNBUFFERED
