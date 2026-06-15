@@ -320,6 +320,51 @@ run_gsm8k() {
   cleanup_bench "$job_name"
 }
 
+# === Helper: Run GSM8K CoT eval (zero-shot for reasoning models) ===
+run_gsm8k_cot() {
+  local config_name="$1" run_dir="$2"
+  local base_url
+  base_url="http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local/v1"
+
+  local gsm8k_cot_config
+  gsm8k_cot_config=$(cat "$NIGHTLY_DIR/benchmarks/gsm8k-cot-eval.json")
+
+  local job_name="nightly-${config_name}-gsm8k-cot"
+  local output_dir="$run_dir/$config_name/gsm8k-cot"
+  mkdir -p "$output_dir"
+
+  log "GSM8K CoT eval: $job_name"
+  run_bench "$job_name" "$base_url" "$gsm8k_cot_config" 1
+  $KN wait --for=condition=Complete "job/$job_name" --timeout=1800s
+  collect_results "$job_name" > "$output_dir/summary.json" 2>/dev/null || true
+  cleanup_bench "$job_name"
+}
+
+# === Helper: Run lm_eval harness Job ===
+run_lm_eval() {
+  local config_dir="$1" config_name="$2" run_dir="$3"
+  local gateway_url="http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local"
+
+  if [ ! -f "$config_dir/lm-eval-job.yaml" ]; then
+    log "WARN: no lm-eval-job.yaml in $config_dir — skipping lm_eval"
+    return 0
+  fi
+
+  local job_name="nightly-${config_name}-lm-eval"
+  local output_dir="$run_dir/$config_name/lm-eval"
+  mkdir -p "$output_dir"
+
+  log "lm_eval: $job_name"
+  sed -e "s|GATEWAY_URL_PLACEHOLDER|$gateway_url|g" \
+      -e "s|RESULTS_DIR_PLACEHOLDER|$output_dir|g" \
+      -e "s|VLLM_IMAGE_PLACEHOLDER|$VLLM_IMAGE|g" \
+      "$config_dir/lm-eval-job.yaml" | $KN apply -f -
+
+  $KN wait --for=condition=Complete "job/$job_name" --timeout=3600s
+  $KN logs "job/$job_name" > "$output_dir/lm-eval-output.log" 2>/dev/null || true
+  $KN delete job "$job_name" --ignore-not-found=true
+}
+
 # ===========================================================================
 # Main loop
 # ===========================================================================
@@ -367,17 +412,35 @@ for config_dir in "$NIGHTLY_DIR"/configs/*/; do
     continue
   fi
 
-  # GSM8K pre-eval
-  run_gsm8k "${config_name}-gsm8k-pre" "$RUN_DIR" \
-    || log "WARN: gsm8k-pre failed for $config_name"
+  # Run benchmarks: eval-only mode (evals list) or default (staircase + gsm8k)
+  evals=$(yq -o=json '.evals // []' "$config_dir/config.yaml")
+  if [ "$evals" != "[]" ] && [ "$evals" != "null" ]; then
+    for eval_type in $(echo "$evals" | jq -r '.[]'); do
+      case "$eval_type" in
+        gsm8k_cot)
+          run_gsm8k_cot "$config_name" "$RUN_DIR" \
+            || log "WARN: gsm8k_cot failed for $config_name"
+          ;;
+        lm_eval)
+          run_lm_eval "$config_dir" "$config_name" "$RUN_DIR" \
+            || log "WARN: lm_eval failed for $config_name"
+          ;;
+        *)
+          log "WARN: unknown eval type '$eval_type' for $config_name"
+          ;;
+      esac
+    done
+  else
+    # Default: staircase + pre/post gsm8k
+    run_gsm8k "${config_name}-gsm8k-pre" "$RUN_DIR" \
+      || log "WARN: gsm8k-pre failed for $config_name"
 
-  # Staircase
-  run_staircase "$config_dir" "$RUN_DIR" \
-    || log "WARN: staircase failed for $config_name"
+    run_staircase "$config_dir" "$RUN_DIR" \
+      || log "WARN: staircase failed for $config_name"
 
-  # GSM8K post-eval
-  run_gsm8k "${config_name}-gsm8k-post" "$RUN_DIR" \
-    || log "WARN: gsm8k-post failed for $config_name"
+    run_gsm8k "${config_name}-gsm8k-post" "$RUN_DIR" \
+      || log "WARN: gsm8k-post failed for $config_name"
+  fi
 
   # Record config result
   # Count GPUs from LWS manifests

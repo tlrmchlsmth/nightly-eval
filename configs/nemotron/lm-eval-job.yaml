@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nightly-nemotron-lm-eval
+spec:
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      volumes:
+        - name: lustre
+          persistentVolumeClaim:
+            claimName: lustre-pvc-vllm
+      containers:
+        - name: lm-eval
+          image: VLLM_IMAGE_PLACEHOLDER
+          imagePullPolicy: Always
+          command:
+            - /bin/bash
+            - -c
+          args:
+            - |-
+              set -euo pipefail
+              source /opt/vllm/bin/activate
+              uv pip install lm-eval[api]
+
+              GATEWAY="GATEWAY_URL_PLACEHOLDER"
+              echo "Waiting for gateway at $GATEWAY..."
+              until curl -sf "$GATEWAY/v1/models" | grep -q '"id"'; do
+                sleep 10
+              done
+
+              MODEL=$(curl -sf "$GATEWAY/v1/models" | jq -r '.data[0].id')
+              echo "Detected model: $MODEL"
+
+              lm_eval \
+                --model local-completions \
+                --tasks gsm8k_cot \
+                --model_args "model=$MODEL,base_url=$GATEWAY/v1/completions,num_concurrent=256,tokenized_requests=False" \
+                --batch_size auto \
+                --output_path RESULTS_DIR_PLACEHOLDER
+          env:
+            - name: HF_HOME
+              value: /mnt/local/hf_cache
+            - name: TOKENIZERS_PARALLELISM
+              value: "false"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          resources:
+            requests:
+              cpu: 8
+              memory: 32Gi
+            limits:
+              cpu: 8
+              memory: 32Gi
+          volumeMounts:
+            - name: lustre
+              mountPath: /mnt/lustre

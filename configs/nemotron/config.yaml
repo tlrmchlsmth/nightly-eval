@@ -1,7 +1,5 @@
 name: nemotron
-description: "EP4 decode (2 pods x 4 GPUs), P/D disaggregated, Nemotron-Ultra-550B-NVFP4"
-sweep:
-  min: 64
-  max: 512
-  steps: 5
-  step_duration: "180s"
+description: "Nemotron-Ultra-550B eval-only: GSM8K CoT + NVIDIA lm_eval"
+evals:
+  - gsm8k_cot
+  - lm_eval
