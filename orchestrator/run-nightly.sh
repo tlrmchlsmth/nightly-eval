@@ -83,10 +83,14 @@ deploy_serving() {
   export DEPLOY_NAME
   envsubst '${DEPLOY_NAME}' < "$NIGHTLY_DIR/serving/gateway.yaml" | $KN apply -f -
 
-  # InferencePool via Helm
+  # InferencePool via Helm (prefer config-local values if present)
   local owner="nightly"
   export OWNER="$owner"
-  envsubst '${DEPLOY_NAME} ${OWNER}' < "$NIGHTLY_DIR/serving/inferencepool-pd.values.yaml" > /tmp/nightly-infpool-values.yaml
+  local infpool_values="$NIGHTLY_DIR/serving/inferencepool-pd.values.yaml"
+  if [ -f "$config_dir/inferencepool-pd.values.yaml" ]; then
+    infpool_values="$config_dir/inferencepool-pd.values.yaml"
+  fi
+  envsubst '${DEPLOY_NAME} ${OWNER}' < "$infpool_values" > /tmp/nightly-infpool-values.yaml
   helm upgrade --install "${DEPLOY_NAME}-infpool" "$INFPOOL_CHART" \
     --version "$INFPOOL_VERSION" \
     -f /tmp/nightly-infpool-values.yaml \
