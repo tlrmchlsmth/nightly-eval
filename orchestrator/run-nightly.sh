@@ -413,9 +413,19 @@ for config_dir in "$NIGHTLY_DIR"/configs/*/; do
     continue
   fi
 
-  # GSM8K pre-eval
-  run_gsm8k "${config_name}-gsm8k-pre" "$RUN_DIR" \
-    || log "WARN: gsm8k-pre failed for $config_name"
+  # Determine benchmark plan: configs with 'evals' define their own eval suite,
+  # configs without get the default GSM8K pre/post + staircase.
+  evals=$(yq -o=json '.evals // []' "$config_dir/config.yaml")
+  has_evals=false
+  if [ "$evals" != "[]" ] && [ "$evals" != "null" ]; then
+    has_evals=true
+  fi
+
+  # Standard GSM8K pre/post (skip when config defines its own evals)
+  if ! $has_evals; then
+    run_gsm8k "${config_name}-gsm8k-pre" "$RUN_DIR" \
+      || log "WARN: gsm8k-pre failed for $config_name"
+  fi
 
   # Staircase (only if sweep is defined)
   if [ "$(yq '.sweep // null' "$config_dir/config.yaml")" != "null" ]; then
@@ -423,13 +433,13 @@ for config_dir in "$NIGHTLY_DIR"/configs/*/; do
       || log "WARN: staircase failed for $config_name"
   fi
 
-  # GSM8K post-eval
-  run_gsm8k "${config_name}-gsm8k-post" "$RUN_DIR" \
-    || log "WARN: gsm8k-post failed for $config_name"
+  if ! $has_evals; then
+    run_gsm8k "${config_name}-gsm8k-post" "$RUN_DIR" \
+      || log "WARN: gsm8k-post failed for $config_name"
+  fi
 
-  # Additional evals (gsm8k_cot, lm_eval, etc.)
-  evals=$(yq -o=json '.evals // []' "$config_dir/config.yaml")
-  if [ "$evals" != "[]" ] && [ "$evals" != "null" ]; then
+  # Custom evals (gsm8k_cot, lm_eval, etc.)
+  if $has_evals; then
     for eval_type in $(echo "$evals" | jq -r '.[]'); do
       case "$eval_type" in
         gsm8k_cot)
