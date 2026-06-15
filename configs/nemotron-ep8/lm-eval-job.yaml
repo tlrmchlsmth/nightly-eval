@@ -58,25 +58,17 @@ spec:
           env:
             - name: HF_HOME
               value: /mnt/local/hf_cache
-            - name: TRANSFORMERS_CACHE
-              value: /mnt/local/hf_cache
-            - name: HF_HUB_CACHE
-              value: /mnt/local/hf_cache
             - name: TOKENIZERS_PARALLELISM
               value: "false"
             - name: PYTHONUNBUFFERED
               value: "1"
           resources:
             requests:
-              cpu: 16
-              ephemeral-storage: 50Gi
-              memory: 128Gi
-              nvidia.com/gpu: "1"
+              cpu: 8
+              memory: 16Gi
             limits:
-              cpu: 16
-              ephemeral-storage: 50Gi
-              memory: 128Gi
-              nvidia.com/gpu: "1"
+              cpu: 8
+              memory: 16Gi
           volumeMounts:
             - name: lustre
               mountPath: /mnt/lustre
