@@ -41,8 +41,9 @@ spec:
           args:
             - |-
               set -euo pipefail
-              apt-get update -qq && apt-get install -y -qq jq >/dev/null 2>&1
-              uv pip install --system nvidia_lm_eval
+              uv venv /tmp/lm_eval -p 3.12 -q
+              uv pip install --python /tmp/lm_eval/bin/python "lm_eval[api]" math_verify
+              export PATH="/tmp/lm_eval/bin:$PATH"
 
               GATEWAY="GATEWAY_URL_PLACEHOLDER"
               echo "Waiting for gateway at $GATEWAY..."
@@ -51,13 +52,14 @@ spec:
                 sleep 10
               done
 
-              MODEL=$(curl -sf "$GATEWAY/v1/models" | jq -r '.data[0].id')
+              MODEL=$(curl -sf "$GATEWAY/v1/models" | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['id'])")
               echo "Detected model: $MODEL"
 
               echo "Starting lm-eval evaluation..."
               lm_eval \
                 --model local-chat-completions \
                 --tasks adlr_gsm8k_chat_cot \
+                --include_path /mnt/lustre/nightly/tasks \
                 --model_args "model=$MODEL,base_url=$GATEWAY/v1/chat/completions,num_concurrent=512,max_retries=3,tokenized_requests=False,max_gen_toks=8192,timeout=1200" \
                 --apply_chat_template \
                 --num_fewshot 0 \
@@ -67,7 +69,7 @@ spec:
               echo "lm-eval evaluation completed!"
           env:
             - name: HF_HOME
-              value: /mnt/local/hf_cache
+              value: /tmp/hf_cache
             - name: TOKENIZERS_PARALLELISM
               value: "false"
             - name: PYTHONUNBUFFERED
