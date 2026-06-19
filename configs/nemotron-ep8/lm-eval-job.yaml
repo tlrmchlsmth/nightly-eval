@@ -56,10 +56,12 @@ spec:
 
               echo "Starting lm-eval evaluation..."
               lm_eval \
-                --model local-completions \
-                --tasks gsm8k_cot \
-                --model_args "model=$MODEL,base_url=$GATEWAY/v1/completions,num_concurrent=512,tokenized_requests=False" \
-                --batch_size auto \
+                --model local-chat-completions \
+                --tasks adlr_gsm8k_chat_cot \
+                --model_args "model=$MODEL,base_url=$GATEWAY/v1/chat/completions,num_concurrent=512,max_retries=3,tokenized_requests=False,max_gen_toks=8192,timeout=1200" \
+                --apply_chat_template \
+                --num_fewshot 0 \
+                --log_samples \
                 --output_path RESULTS_DIR_PLACEHOLDER
 
               echo "lm-eval evaluation completed!"
