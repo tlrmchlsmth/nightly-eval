@@ -42,7 +42,7 @@ spec:
             - |-
               set -euo pipefail
               uv venv /tmp/lm_eval -p 3.12 -q
-              uv pip install --python /tmp/lm_eval/bin/python "lm_eval[api]" math_verify
+              uv pip install --python /tmp/lm_eval/bin/python "lm_eval[api]==0.4.11" math_verify
               export PATH="/tmp/lm_eval/bin:$PATH"
 
               GATEWAY="GATEWAY_URL_PLACEHOLDER"
