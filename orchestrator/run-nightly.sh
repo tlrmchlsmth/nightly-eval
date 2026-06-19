@@ -442,6 +442,10 @@ for config_dir in "$NIGHTLY_DIR"/configs/*/; do
   if $has_evals; then
     for eval_type in $(echo "$evals" | jq -r '.[]'); do
       case "$eval_type" in
+        gsm8k)
+          run_gsm8k "${config_name}-gsm8k" "$RUN_DIR" \
+            || log "WARN: gsm8k failed for $config_name"
+          ;;
         gsm8k_cot)
           run_gsm8k_cot "$config_name" "$RUN_DIR" \
             || log "WARN: gsm8k_cot failed for $config_name"
