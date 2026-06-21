@@ -341,6 +341,9 @@ run_gsm8k_cot() {
 }
 
 # === Helper: Run lm_eval harness Job ===
+# NOTE: lm-eval-job.yaml patches lm_eval's RegexFilter at runtime to handle
+# content=null from vLLM's --reasoning-parser (model exhausts max_tokens inside
+# <think> without closing it). See the sed command in the job YAML.
 run_lm_eval() {
   local config_dir="$1" config_name="$2" run_dir="$3"
   local gateway_url="http://${DEPLOY_NAME}-inference-gateway-istio.${NAMESPACE}.svc.cluster.local"

@@ -86,7 +86,7 @@ spec:
                   --gpu-memory-utilization 0.90 \
                   --max-num-seqs 256 \
                   --mamba-backend flashinfer \
-                  --mamba-ssm-cache-dtype float32 \
+                  --mamba-ssm-cache-dtype float16 \
                   --enable-flashinfer-autotune \
                   --all2all-backend "flashinfer_nvlink_one_sided" \
                   --kv-cache-dtype fp8 \

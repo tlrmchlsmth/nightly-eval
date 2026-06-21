@@ -33,7 +33,7 @@ spec:
             type: Directory
       containers:
         - name: lm-eval
-          image: VLLM_IMAGE_PLACEHOLDER
+          image: nvcr.io/nvidia/eval-factory/lm-evaluation-harness:25.10
           imagePullPolicy: Always
           command:
             - /bin/bash
@@ -41,9 +41,6 @@ spec:
           args:
             - |-
               set -euo pipefail
-              uv venv /tmp/lm_eval -p 3.12 -q
-              uv pip install --python /tmp/lm_eval/bin/python "lm_eval[api]==0.4.11" math_verify
-              export PATH="/tmp/lm_eval/bin:$PATH"
 
               GATEWAY="GATEWAY_URL_PLACEHOLDER"
               echo "Waiting for gateway at $GATEWAY..."
@@ -55,12 +52,24 @@ spec:
               MODEL=$(curl -sf "$GATEWAY/v1/models" | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['id'])")
               echo "Detected model: $MODEL"
 
+              # Workaround 1: vLLM's --reasoning-parser returns content=null when
+              # the model exhausts max_tokens inside <think>. lm_eval's
+              # RegexFilter crashes on None.
+              EXTRACT_PY=$(python3 -c "import lm_eval.filters.extraction; print(lm_eval.filters.extraction.__file__)")
+              sed -i 's/match = self.regex.findall(resp)/match = self.regex.findall(resp if resp is not None else "")/' "$EXTRACT_PY"
+
+              # Workaround 2: --reasoning-parser splits output into
+              # reasoning_content and content fields. Nemotron puts everything
+              # (including the final answer) inside <think>, so content is
+              # empty. Patch lm_eval to concatenate both fields.
+              OPENAI_PY=$(python3 -c "import lm_eval.models.openai_completions; print(lm_eval.models.openai_completions.__file__)")
+              sed -i 's|return \[outputs\["choices"\]\[0\]\["message"\]\["content"\]\]|_m = outputs["choices"][0]["message"]; _r = _m.get("reasoning_content") or ""; _c = _m.get("content") or ""; return [(_r + chr(10) + _c).strip() if _r else _c]|' "$OPENAI_PY"
+
               echo "Starting lm-eval evaluation..."
               lm_eval \
                 --model local-chat-completions \
-                --tasks adlr_gsm8k_chat_cot \
-                --include_path /mnt/lustre/nightly/tasks \
-                --model_args "model=$MODEL,base_url=$GATEWAY/v1/chat/completions,num_concurrent=512,max_retries=3,tokenized_requests=False,max_gen_toks=8192,timeout=1200" \
+                --tasks gsm8k_cot_zeroshot \
+                --model_args "model=$MODEL,base_url=$GATEWAY/v1/chat/completions,num_concurrent=128,max_retries=5,tokenized_requests=False,max_gen_toks=32768,timeout=1200" \
                 --apply_chat_template \
                 --num_fewshot 0 \
                 --log_samples \
