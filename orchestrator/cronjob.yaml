@@ -44,6 +44,12 @@ spec:
                       name: hf-secret
                       key: HF_TOKEN
                       optional: true
+                - name: GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: github-token-secret
+                      key: GITHUB_TOKEN
+                      optional: true
               resources:
                 requests:
                   cpu: "2"
