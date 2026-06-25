@@ -74,6 +74,12 @@ deploy_serving() {
   log "Deploying $config_name"
   log "  Image: $VLLM_IMAGE"
 
+  # Delete stale LWS resources first — LWS init container fields are immutable,
+  # so kubectl apply will be rejected if the spec drifts from a prior run.
+  $KN delete lws "${DEPLOY_NAME}-decode" --ignore-not-found=true --grace-period=0 --force &
+  $KN delete lws "${DEPLOY_NAME}-prefill" --ignore-not-found=true --grace-period=0 --force &
+  wait
+
   # Apply K8s manifests with image substitution (skip config.yaml)
   { cat "$config_dir"/serviceAccount.yaml; echo "---"; cat "$config_dir"/decode.yaml; echo "---"; cat "$config_dir"/prefill.yaml; } \
     | sed "s|VLLM_IMAGE_PLACEHOLDER|$VLLM_IMAGE|g" \
