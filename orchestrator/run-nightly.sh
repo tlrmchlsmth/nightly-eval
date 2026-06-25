@@ -419,4 +419,17 @@ if [ -f "$NIGHTLY_DIR/postprocess/pareto.py" ]; then
   python3 "$NIGHTLY_DIR/postprocess/regression.py" "$RUN_DIR" || log "WARN: regression.py failed"
 fi
 
+# Dashboard
+if [ -f "$NIGHTLY_DIR/postprocess/dashboard.py" ]; then
+  log "Generating dashboard..."
+  python3 "$NIGHTLY_DIR/postprocess/dashboard.py" "$RUN_DIR" || log "WARN: dashboard.py failed"
+fi
+
+if [ -n "${GITHUB_TOKEN:-}" ] && [ -f "$RUN_DIR/dashboard.html" ]; then
+  log "Publishing dashboard..."
+  bash "$NIGHTLY_DIR/postprocess/publish-dashboard.sh" "$RUN_DIR" || log "WARN: dashboard publish failed"
+else
+  log "Skipping dashboard publish (no GITHUB_TOKEN or no dashboard.html)"
+fi
+
 exit $FAILED

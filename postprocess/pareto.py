@@ -65,6 +65,7 @@ def load_stages(summary_path: Path) -> list[dict]:
             "duration_seconds": duration,
             "output_tokens_per_second": total_tok_s,
             "requests": requests,
+            "itl_mean": avg_latency("itl_ms", "mean"),
             "itl_p50": avg_latency("itl_ms", "p50"),
             "itl_p95": avg_latency("itl_ms", "p90"),
             "itl_p99": avg_latency("itl_ms", "p99"),
@@ -101,17 +102,22 @@ def compute_pareto_points(run_dir: Path) -> list[dict]:
             tok_per_sec = stage["output_tokens_per_second"]
             tok_per_sec_per_gpu = tok_per_sec / num_gpus if num_gpus > 0 else 0
 
+            itl_mean = stage["itl_mean"] or stage["itl_p50"]
+            interactivity = 1000.0 / itl_mean if itl_mean > 0 else 0
+
             points.append({
                 "config": config_name,
                 "num_gpus": num_gpus,
                 "concurrency": stage["concurrency"],
-                "tpot_p50_ms": stage["itl_p50"],
-                "tpot_p95_ms": stage["itl_p95"],
-                "tpot_p99_ms": stage["itl_p99"],
+                "interactivity": interactivity,
+                "itl_mean_ms": itl_mean,
+                "itl_p50_ms": stage["itl_p50"],
+                "itl_p95_ms": stage["itl_p95"],
+                "itl_p99_ms": stage["itl_p99"],
                 "ttft_p50_ms": stage["ttft_p50"],
                 "ttft_p95_ms": stage["ttft_p95"],
-                "tok_per_sec": round(tok_per_sec, 1),
-                "tok_per_sec_per_gpu": round(tok_per_sec_per_gpu, 1),
+                "tok_per_sec": tok_per_sec,
+                "tok_per_sec_per_gpu": tok_per_sec_per_gpu,
                 "num_requests": stage["requests"],
                 "duration_s": stage["duration_seconds"],
             })
