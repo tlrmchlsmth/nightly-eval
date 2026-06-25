@@ -22,8 +22,8 @@ from datetime import datetime, timezone
 from html import escape
 from pathlib import Path
 
-STATUS_COLORS = {"pass": "#22c55e", "warn": "#f59e0b", "fail": "#ef4444"}
-CHART_COLORS = ["#3b82f6", "#ef4444", "#f59e0b", "#8b5cf6", "#06b6d4", "#ec4899"]
+STATUS_COLORS = {"pass": "#26a269", "warn": "#e5a50a", "fail": "#c01c28"}
+CHART_COLORS = ["#1c71d8", "#c01c28", "#e5a50a", "#813d9c", "#2ec27e", "#e66100"]
 
 
 # ---------------------------------------------------------------------------
@@ -61,132 +61,88 @@ def load_csv_rows(path: Path) -> list[dict]:
 # SVG chart renderers
 # ---------------------------------------------------------------------------
 
-def render_pareto_svg(points: list[dict], frontier: list[dict]) -> str:
+def _interactivity(p: dict) -> float:
+    """tok/sec/user derived from mean ITL. Falls back to p50 if mean missing."""
+    itl = p.get("itl_mean_ms") or p.get("tpot_p50_ms") or 0
+    if itl > 0:
+        return 1000.0 / itl
+    return p.get("interactivity", 0)
+
+
+def render_pareto_plotly(points: list[dict], frontier: list[dict]) -> str:
     if not points:
         return '<p style="color:#888;">No pareto data available.</p>'
-
-    w, h = 720, 420
-    pad_l, pad_r, pad_t, pad_b = 70, 30, 40, 60
-
-    plot_w = w - pad_l - pad_r
-    plot_h = h - pad_t - pad_b
-
-    xs = [p["tpot_p50_ms"] for p in points]
-    ys = [p["tok_per_sec_per_gpu"] for p in points]
-
-    x_min, x_max = min(xs), max(xs)
-    y_min, y_max = min(ys), max(ys)
-
-    x_pad = (x_max - x_min) * 0.08 or 1
-    y_pad = (y_max - y_min) * 0.08 or 1
-    x_min -= x_pad
-    x_max += x_pad
-    y_min -= y_pad
-    y_max += y_pad
-
-    def sx(v):
-        return pad_l + (v - x_min) / (x_max - x_min) * plot_w
-
-    def sy(v):
-        return pad_t + plot_h - (v - y_min) / (y_max - y_min) * plot_h
 
     configs = sorted(set(p["config"] for p in points))
     color_map = {c: CHART_COLORS[i % len(CHART_COLORS)] for i, c in enumerate(configs)}
 
-    parts = [
-        f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" '
-        f'style="width:100%;max-width:{w}px;height:auto;font-family:system-ui,sans-serif;">',
-        f'<rect width="{w}" height="{h}" fill="#fafafa" rx="8"/>',
-    ]
-
-    # Grid lines and axis ticks
-    n_xticks = 5
-    n_yticks = 5
-    parts.append('<g stroke="#e5e7eb" stroke-width="1">')
-    for i in range(n_xticks + 1):
-        v = x_min + (x_max - x_min) * i / n_xticks
-        x = sx(v)
-        parts.append(f'<line x1="{x:.1f}" y1="{pad_t}" x2="{x:.1f}" y2="{pad_t + plot_h}"/>')
-        parts.append(
-            f'<text x="{x:.1f}" y="{pad_t + plot_h + 20}" text-anchor="middle" '
-            f'fill="#6b7280" font-size="11">{v:.0f}</text>'
-        )
-    for i in range(n_yticks + 1):
-        v = y_min + (y_max - y_min) * i / n_yticks
-        y = sy(v)
-        parts.append(f'<line x1="{pad_l}" y1="{y:.1f}" x2="{pad_l + plot_w}" y2="{y:.1f}"/>')
-        parts.append(
-            f'<text x="{pad_l - 8}" y="{y + 4:.1f}" text-anchor="end" '
-            f'fill="#6b7280" font-size="11">{v:.1f}</text>'
-        )
-    parts.append("</g>")
-
-    # Axis labels
-    parts.append(
-        f'<text x="{pad_l + plot_w / 2}" y="{h - 8}" text-anchor="middle" '
-        f'fill="#374151" font-size="13">TPOT p50 (ms)</text>'
-    )
-    parts.append(
-        f'<text x="16" y="{pad_t + plot_h / 2}" text-anchor="middle" '
-        f'fill="#374151" font-size="13" transform="rotate(-90 16 {pad_t + plot_h / 2})">'
-        f"tok/sec/GPU</text>"
-    )
-
-    # Title
-    parts.append(
-        f'<text x="{w / 2}" y="24" text-anchor="middle" fill="#111827" '
-        f'font-size="15" font-weight="600">Efficiency Pareto Frontier</text>'
-    )
-
-    # Pareto frontier line
-    if frontier:
-        sorted_f = sorted(frontier, key=lambda p: p["tpot_p50_ms"])
-        fpts = " ".join(f"{sx(p['tpot_p50_ms']):.1f},{sy(p['tok_per_sec_per_gpu']):.1f}" for p in sorted_f)
-        parts.append(
-            f'<polyline points="{fpts}" fill="none" stroke="#111827" '
-            f'stroke-width="2" stroke-dasharray="6 4" opacity="0.5"/>'
-        )
-
-    # Data points with concurrency labels
+    traces = []
     for config in configs:
-        color = color_map[config]
         cfg_pts = sorted(
             [p for p in points if p["config"] == config],
             key=lambda p: p["concurrency"],
         )
-
-        # Connecting line
-        if len(cfg_pts) > 1:
-            line_pts = " ".join(
-                f"{sx(p['tpot_p50_ms']):.1f},{sy(p['tok_per_sec_per_gpu']):.1f}"
+        traces.append({
+            "x": [_interactivity(p) for p in cfg_pts],
+            "y": [p["tok_per_sec_per_gpu"] for p in cfg_pts],
+            "text": [f"c={int(p['concurrency'])}" for p in cfg_pts],
+            "customdata": [
+                [p.get("itl_mean_ms") or p.get("tpot_p50_ms", 0),
+                 p.get("itl_p95_ms") or p.get("tpot_p95_ms", 0),
+                 p.get("ttft_p50_ms", 0),
+                 p.get("tok_per_sec", 0),
+                 int(p.get("concurrency", 0))]
                 for p in cfg_pts
-            )
-            parts.append(
-                f'<polyline points="{line_pts}" fill="none" stroke="{color}" '
-                f'stroke-width="1.5" opacity="0.3"/>'
-            )
+            ],
+            "name": config,
+            "mode": "lines+markers+text",
+            "textposition": "top right",
+            "textfont": {"size": 9, "color": "#77767b"},
+            "marker": {"size": 9, "color": color_map[config]},
+            "line": {"color": color_map[config], "width": 1.5, "dash": "dot"},
+            "hovertemplate": (
+                "<b>%{fullData.name}</b><br>"
+                "Interactivity: %{x:.2f} tok/s/user<br>"
+                "Throughput: %{y:.2f} tok/s/GPU<br>"
+                "Concurrency: %{customdata[4]}<br>"
+                "ITL mean: %{customdata[0]:.2f} ms<br>"
+                "ITL p95: %{customdata[1]:.2f} ms<br>"
+                "TTFT p50: %{customdata[2]:.2f} ms<br>"
+                "Total tok/sec: %{customdata[3]:.0f}"
+                "<extra></extra>"
+            ),
+        })
 
-        for p in cfg_pts:
-            cx = sx(p["tpot_p50_ms"])
-            cy = sy(p["tok_per_sec_per_gpu"])
-            parts.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="5" fill="{color}"/>')
-            parts.append(
-                f'<text x="{cx + 7:.1f}" y="{cy - 5:.1f}" fill="#6b7280" '
-                f'font-size="9">{int(p["concurrency"])}</text>'
-            )
+    if frontier:
+        sorted_f = sorted(frontier, key=lambda p: _interactivity(p))
+        traces.append({
+            "x": [_interactivity(p) for p in sorted_f],
+            "y": [p["tok_per_sec_per_gpu"] for p in sorted_f],
+            "name": "Pareto frontier",
+            "mode": "lines",
+            "line": {"color": "#241f31", "width": 2, "dash": "dash"},
+            "hoverinfo": "skip",
+            "showlegend": True,
+        })
 
-    # Legend
-    lx = pad_l + 10
-    ly = pad_t + 12
-    for i, config in enumerate(configs):
-        parts.append(f'<rect x="{lx}" y="{ly + i * 18 - 8}" width="10" height="10" rx="2" fill="{color_map[config]}"/>')
-        parts.append(
-            f'<text x="{lx + 14}" y="{ly + i * 18}" fill="#374151" font-size="11">'
-            f"{escape(config)}</text>"
-        )
+    layout = {
+        "title": {"text": "Efficiency Pareto Frontier", "font": {"size": 15, "color": "#241f31"}},
+        "xaxis": {"title": "Interactivity (tok/sec/user)", "gridcolor": "#deddda"},
+        "yaxis": {"title": "Throughput (tok/sec/GPU)", "gridcolor": "#deddda"},
+        "plot_bgcolor": "#fafafa",
+        "paper_bgcolor": "rgba(0,0,0,0)",
+        "font": {"family": "Cantarell, 'Segoe UI', Roboto, sans-serif", "color": "#241f31"},
+        "legend": {"orientation": "h", "yanchor": "bottom", "y": 1.02, "xanchor": "center", "x": 0.5},
+        "margin": {"l": 60, "r": 30, "t": 60, "b": 50},
+        "hovermode": "closest",
+    }
 
-    parts.append("</svg>")
-    return "\n".join(parts)
+    div_id = "pareto-chart"
+    return (
+        f'<div id="{div_id}" style="width:100%;height:480px;"></div>\n'
+        f"<script>Plotly.newPlot('{div_id}',{json.dumps(traces)},{json.dumps(layout)},"
+        f"{{responsive:true,displayModeBar:false}});</script>"
+    )
 
 
 def render_trend_svg(history: list[dict], metric: str, label: str) -> str:
@@ -238,24 +194,24 @@ def render_trend_svg(history: list[dict], metric: str, label: str) -> str:
     for i in range(4):
         v = v_min + (v_max - v_min) * i / 3
         y = sy(v)
-        parts.append(f'<line x1="{pad_l}" y1="{y:.1f}" x2="{pad_l + plot_w}" y2="{y:.1f}" stroke="#e5e7eb"/>')
+        parts.append(f'<line x1="{pad_l}" y1="{y:.2f}" x2="{pad_l + plot_w}" y2="{y:.2f}" stroke="#e5e7eb"/>')
         parts.append(
-            f'<text x="{pad_l - 5}" y="{y + 3:.1f}" text-anchor="end" fill="#9ca3af" font-size="9">'
-            f"{v:.1f}</text>"
+            f'<text x="{pad_l - 5}" y="{y + 3:.2f}" text-anchor="end" fill="#9ca3af" font-size="9">'
+            f"{v:.2f}</text>"
         )
 
     # Line + points
-    line_pts = " ".join(f"{sx(i):.1f},{sy(d[1]):.1f}" for i, d in enumerate(data))
+    line_pts = " ".join(f"{sx(i):.2f},{sy(d[1]):.2f}" for i, d in enumerate(data))
     parts.append(f'<polyline points="{line_pts}" fill="none" stroke="#3b82f6" stroke-width="2"/>')
 
     for i, (date_str, val) in enumerate(data):
         x = sx(i)
         y = sy(val)
-        parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="#3b82f6"/>')
+        parts.append(f'<circle cx="{x:.2f}" cy="{y:.2f}" r="3.5" fill="#3b82f6"/>')
         # Date label on x-axis (show month-day only)
         short_date = date_str[-5:] if len(date_str) >= 5 else date_str
         parts.append(
-            f'<text x="{x:.1f}" y="{pad_t + plot_h + 14}" text-anchor="middle" '
+            f'<text x="{x:.2f}" y="{pad_t + plot_h + 14}" text-anchor="middle" '
             f'fill="#9ca3af" font-size="9">{escape(short_date)}</text>'
         )
 
@@ -270,9 +226,9 @@ def render_trend_svg(history: list[dict], metric: str, label: str) -> str:
 def status_badge(status: str) -> str:
     color = STATUS_COLORS.get(status, "#6b7280")
     return (
-        f'<span style="display:inline-block;padding:6px 20px;border-radius:6px;'
-        f'background:{color};color:#fff;font-weight:700;font-size:1.1rem;'
-        f'text-transform:uppercase;letter-spacing:0.05em;">{escape(status)}</span>'
+        f'<span style="display:inline-block;padding:4px 16px;border-radius:0;'
+        f'background:{color};color:#fff;font-weight:700;font-size:0.85rem;'
+        f'text-transform:uppercase;letter-spacing:0.04em;">{escape(status)}</span>'
     )
 
 
@@ -337,18 +293,18 @@ def render_summary_cards(metadata: dict, report: dict, gsm8k: list, frontier: li
         cards.append(f"""
       <div class="card">
         <div class="card-label">Peak Throughput</div>
-        <div class="card-value">{peak['tok_per_sec_per_gpu']:.1f}</div>
+        <div class="card-value">{peak['tok_per_sec_per_gpu']:.2f}</div>
         <div class="card-sub">tok/sec/GPU @ c={int(peak.get('concurrency', 0))}</div>
       </div>""")
 
-    # TPOT p50 at peak throughput
     if frontier:
-        best_tpot = min(frontier, key=lambda p: p.get("tpot_p50_ms", float("inf")))
+        best_inter = max(frontier, key=lambda p: _interactivity(p))
+        inter_val = _interactivity(best_inter)
         cards.append(f"""
       <div class="card">
-        <div class="card-label">Best TPOT p50</div>
-        <div class="card-value">{best_tpot['tpot_p50_ms']:.1f} ms</div>
-        <div class="card-sub">@ c={int(best_tpot.get('concurrency', 0))}</div>
+        <div class="card-label">Best Interactivity</div>
+        <div class="card-value">{inter_val:.2f}</div>
+        <div class="card-sub">tok/s/user @ c={int(best_inter.get('concurrency', 0))}</div>
       </div>""")
 
     failed = metadata.get("failed", 0) if metadata else 0
@@ -364,20 +320,23 @@ def render_summary_cards(metadata: dict, report: dict, gsm8k: list, frontier: li
 
 
 def render_pareto_section(points: list[dict], frontier: list[dict]) -> str:
-    svg = render_pareto_svg(points, frontier)
+    svg = render_pareto_plotly(points, frontier)
 
     # Collapsible data table
     if points:
-        cols = ["config", "concurrency", "tpot_p50_ms", "tpot_p95_ms",
-                "ttft_p50_ms", "tok_per_sec", "tok_per_sec_per_gpu"]
+        cols = ["config", "concurrency", "interactivity", "itl_mean_ms",
+                "itl_p95_ms", "ttft_p50_ms", "tok_per_sec", "tok_per_sec_per_gpu"]
         header = "".join(f"<th>{escape(c)}</th>" for c in cols)
         rows = []
         for p in sorted(points, key=lambda p: (p["config"], p.get("concurrency", 0))):
             cells = []
             for c in cols:
-                v = p.get(c, "")
+                if c == "interactivity":
+                    v = _interactivity(p)
+                else:
+                    v = p.get(c, "")
                 if isinstance(v, float):
-                    cells.append(f"<td>{v:.1f}</td>")
+                    cells.append(f"<td>{v:.2f}</td>")
                 else:
                     cells.append(f"<td>{escape(str(v))}</td>")
             rows.append("<tr>" + "".join(cells) + "</tr>")
@@ -412,16 +371,16 @@ def render_regression_section(report: dict) -> str:
         color = STATUS_COLORS.get(status, "#6b7280")
         badge = f'<span class="status-sm" style="background:{color};">{escape(status).upper()}</span>'
 
-        tpot = f"{r['tpot_p50_ms']:.1f}" if r.get("tpot_p50_ms") is not None else "N/A"
-        base_tpot = f"{r['baseline_tpot_p50_ms']:.1f}" if r.get("baseline_tpot_p50_ms") is not None else "N/A"
+        tpot = f"{r['tpot_p50_ms']:.2f}" if r.get("tpot_p50_ms") is not None else "N/A"
+        base_tpot = f"{r['baseline_tpot_p50_ms']:.2f}" if r.get("baseline_tpot_p50_ms") is not None else "N/A"
         if r.get("tpot_p50_ms") is not None and r.get("baseline_tpot_p50_ms"):
             tpot_delta = (r["tpot_p50_ms"] / r["baseline_tpot_p50_ms"] - 1) * 100
             tpot_str = f"{tpot} <span class='delta'>({tpot_delta:+.1f}%)</span>"
         else:
             tpot_str = tpot
 
-        tput = f"{r['tok_per_sec_per_gpu']:.1f}" if r.get("tok_per_sec_per_gpu") is not None else "N/A"
-        base_tput = f"{r['baseline_tok_per_sec_per_gpu']:.1f}" if r.get("baseline_tok_per_sec_per_gpu") is not None else "N/A"
+        tput = f"{r['tok_per_sec_per_gpu']:.2f}" if r.get("tok_per_sec_per_gpu") is not None else "N/A"
+        base_tput = f"{r['baseline_tok_per_sec_per_gpu']:.2f}" if r.get("baseline_tok_per_sec_per_gpu") is not None else "N/A"
         if r.get("tok_per_sec_per_gpu") is not None and r.get("baseline_tok_per_sec_per_gpu"):
             tput_delta = (r["tok_per_sec_per_gpu"] / r["baseline_tok_per_sec_per_gpu"] - 1) * 100
             tput_str = f"{tput} <span class='delta'>({tput_delta:+.1f}%)</span>"
@@ -444,7 +403,7 @@ def render_regression_section(report: dict) -> str:
       <table>
         <thead><tr>
           <th>Config</th><th>Status</th>
-          <th>TPOT p50 (ms)</th><th>Baseline</th>
+          <th>ITL p50 (ms)</th><th>Baseline</th>
           <th>tok/sec/GPU</th><th>Baseline</th>
           <th>Messages</th>
         </tr></thead>
@@ -494,7 +453,7 @@ def render_gsm8k_section(gsm8k: list) -> str:
 
 def render_trend_section(history: list[dict]) -> str:
     tput_svg = render_trend_svg(history, "tok_per_sec_per_gpu", "tok/sec/GPU (7-day trend)")
-    tpot_svg = render_trend_svg(history, "tpot_p50_ms", "TPOT p50 ms (7-day trend)")
+    tpot_svg = render_trend_svg(history, "tpot_p50_ms", "ITL p50 ms (7-day trend)")
 
     return f"""
     <section>
@@ -513,50 +472,72 @@ def render_trend_section(history: list[dict]) -> str:
 CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: #f9fafb; color: #111827; line-height: 1.5;
+  font-family: Cantarell, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  background: #fafafa; color: #241f31; line-height: 1.5;
 }
-.container { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+.container { max-width: 1100px; margin: 0 auto; padding: 0; }
 header {
-  background: #111827; color: #f9fafb; padding: 24px 28px; border-radius: 12px;
-  margin-bottom: 24px;
+  background: #241f31; color: #fff; padding: 14px 24px; border-radius: 0;
 }
-.header-top { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-h1 { font-size: 1.5rem; font-weight: 700; }
-.header-meta { margin-top: 12px; display: flex; gap: 24px; flex-wrap: wrap; font-size: 0.9rem; color: #d1d5db; }
-.header-meta code { background: #1f2937; padding: 2px 6px; border-radius: 4px; font-size: 0.85rem; }
-.cards { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+.header-top {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+h1 { font-size: 1.15rem; font-weight: 700; }
+.header-meta {
+  margin-top: 8px; display: flex; gap: 20px; flex-wrap: wrap;
+  font-size: 0.82rem; color: #c0bfbc;
+}
+.header-meta code {
+  background: rgba(255,255,255,0.12); padding: 1px 6px; border-radius: 0;
+  font-size: 0.8rem; font-family: "Source Code Pro", monospace;
+}
+.content { background: #fafafa; padding: 20px 24px; border-radius: 0; }
+.cards { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
 .card {
-  flex: 1; min-width: 150px; background: #fff; border-radius: 10px;
-  padding: 18px 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border-top: 4px solid #e5e7eb;
+  flex: 1; min-width: 140px; background: #fff; border-radius: 0;
+  padding: 16px 18px; border: 1px solid #deddda;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
-.card-label { font-size: 0.8rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-.card-value { font-size: 1.6rem; font-weight: 700; margin: 4px 0; }
-.card-sub { font-size: 0.8rem; color: #9ca3af; }
+.card-label {
+  font-size: 0.72rem; color: #77767b; text-transform: uppercase;
+  letter-spacing: 0.06em; font-weight: 600;
+}
+.card-value { font-size: 1.5rem; font-weight: 700; margin: 2px 0; }
+.card-sub { font-size: 0.78rem; color: #9a9996; }
 section {
-  background: #fff; border-radius: 10px; padding: 24px; margin-bottom: 20px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+  background: #fff; border-radius: 0; padding: 20px 24px; margin-bottom: 16px;
+  border: 1px solid #deddda;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
-h2 { font-size: 1.15rem; font-weight: 700; margin-bottom: 16px; color: #111827; }
-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
-th { text-align: left; padding: 8px 10px; border-bottom: 2px solid #e5e7eb; color: #6b7280; font-weight: 600; font-size: 0.8rem; text-transform: uppercase; }
-td { padding: 8px 10px; border-bottom: 1px solid #f3f4f6; }
-tbody tr:nth-child(even) { background: #f9fafb; }
+h2 { font-size: 1.05rem; font-weight: 700; margin-bottom: 14px; color: #241f31; }
+table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+th {
+  text-align: left; padding: 7px 10px; border-bottom: 1px solid #deddda;
+  color: #77767b; font-weight: 600; font-size: 0.75rem; text-transform: uppercase;
+}
+td { padding: 7px 10px; border-bottom: 1px solid #f6f5f4; }
+tbody tr:hover { background: #f6f5f4; }
 .status-sm {
-  display: inline-block; padding: 2px 10px; border-radius: 4px;
-  color: #fff; font-weight: 700; font-size: 0.75rem; text-transform: uppercase;
+  display: inline-block; padding: 2px 10px; border-radius: 0;
+  color: #fff; font-weight: 700; font-size: 0.72rem; text-transform: uppercase;
 }
-.delta { color: #6b7280; font-size: 0.82rem; }
-.msg { color: #9ca3af; font-size: 0.82rem; max-width: 250px; }
-.trends { display: flex; gap: 20px; flex-wrap: wrap; }
+.delta { color: #77767b; font-size: 0.8rem; }
+.msg { color: #9a9996; font-size: 0.8rem; max-width: 250px; }
+.trends { display: flex; gap: 16px; flex-wrap: wrap; }
 .trends > div { flex: 1; min-width: 300px; }
 details { margin-top: 12px; }
-summary { cursor: pointer; color: #3b82f6; font-size: 0.88rem; font-weight: 500; }
-footer { text-align: center; padding: 20px; color: #9ca3af; font-size: 0.8rem; }
+summary {
+  cursor: pointer; color: #1c71d8; font-size: 0.84rem; font-weight: 500;
+  padding: 6px 0;
+}
+footer {
+  text-align: center; padding: 16px; color: #9a9996; font-size: 0.75rem;
+}
 @media print {
   body { background: #fff; }
-  header { background: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  .card, section { box-shadow: none; border: 1px solid #e5e7eb; }
+  header { background: #241f31; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .card, section { box-shadow: none; }
 }
 """
 
@@ -585,16 +566,19 @@ def render_dashboard(run_dir: Path) -> str:
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Nightly Eval &mdash; {escape(report.get('date', ''))}</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <style>{CSS}</style>
 </head>
 <body>
 <div class="container">
   {header}
-  {cards}
-  {pareto_sec}
-  {regression_sec}
-  {gsm8k_sec}
-  {trend_sec}
+  <div class="content">
+    {cards}
+    {pareto_sec}
+    {regression_sec}
+    {gsm8k_sec}
+    {trend_sec}
+  </div>
 </div>
 <footer>Generated {now} from {escape(str(run_dir))}</footer>
 </body>
