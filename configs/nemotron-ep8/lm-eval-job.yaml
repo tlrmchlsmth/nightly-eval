@@ -68,11 +68,12 @@ spec:
               echo "Starting lm-eval evaluation..."
               lm_eval \
                 --model local-chat-completions \
-                --tasks gsm8k_cot_zeroshot \
+                --tasks gsm8k \
                 --model_args "model=$MODEL,base_url=$GATEWAY/v1/chat/completions,num_concurrent=128,max_retries=5,tokenized_requests=False,max_gen_toks=32768,timeout=1200" \
                 --apply_chat_template \
-                --num_fewshot 0 \
+                --num_fewshot 5 \
                 --log_samples \
+                --gen_kwargs '{"chat_template_kwargs":{"enable_thinking":false}}' \
                 --output_path RESULTS_DIR_PLACEHOLDER
 
               echo "lm-eval evaluation completed!"
