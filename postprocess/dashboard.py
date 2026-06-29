@@ -63,7 +63,7 @@ def load_csv_rows(path: Path) -> list[dict]:
 
 def _interactivity(p: dict) -> float:
     """tok/sec/user derived from mean ITL. Falls back to p50 if mean missing."""
-    itl = p.get("itl_mean_ms") or p.get("tpot_p50_ms") or 0
+    itl = p.get("itl_mean_ms") or p.get("itl_p50_ms", 0)
     if itl > 0:
         return 1000.0 / itl
     return p.get("interactivity", 0)
@@ -87,8 +87,8 @@ def render_pareto_plotly(points: list[dict], frontier: list[dict]) -> str:
             "y": [p["tok_per_sec_per_gpu"] for p in cfg_pts],
             "text": [f"c={int(p['concurrency'])}" for p in cfg_pts],
             "customdata": [
-                [p.get("itl_mean_ms") or p.get("tpot_p50_ms", 0),
-                 p.get("itl_p95_ms") or p.get("tpot_p95_ms", 0),
+                [p.get("itl_mean_ms") or p.get("itl_p50_ms", 0),
+                 p.get("itl_p95_ms") or p.get("itl_p95_ms", 0),
                  p.get("ttft_p50_ms", 0),
                  p.get("tok_per_sec", 0),
                  int(p.get("concurrency", 0))]
@@ -155,8 +155,13 @@ def render_trend_svg(history: list[dict], metric: str, label: str) -> str:
     for entry in history:
         vals = []
         for cfg in entry.get("configs", {}).values():
-            if isinstance(cfg, dict) and metric in cfg:
-                vals.append(cfg[metric])
+            if not isinstance(cfg, dict):
+                continue
+            v = cfg.get(metric)
+            if v is None and metric == "itl_p50_ms":
+                v = cfg.get("tpot_p50_ms")
+            if v is not None:
+                vals.append(v)
         if vals:
             data.append((entry.get("date", "?"), sum(vals) / len(vals)))
 
@@ -371,13 +376,13 @@ def render_regression_section(report: dict) -> str:
         color = STATUS_COLORS.get(status, "#6b7280")
         badge = f'<span class="status-sm" style="background:{color};">{escape(status).upper()}</span>'
 
-        tpot = f"{r['tpot_p50_ms']:.2f}" if r.get("tpot_p50_ms") is not None else "N/A"
-        base_tpot = f"{r['baseline_tpot_p50_ms']:.2f}" if r.get("baseline_tpot_p50_ms") is not None else "N/A"
-        if r.get("tpot_p50_ms") is not None and r.get("baseline_tpot_p50_ms"):
-            tpot_delta = (r["tpot_p50_ms"] / r["baseline_tpot_p50_ms"] - 1) * 100
-            tpot_str = f"{tpot} <span class='delta'>({tpot_delta:+.1f}%)</span>"
+        itl = f"{r['itl_p50_ms']:.2f}" if r.get("itl_p50_ms") is not None else "N/A"
+        base_itl = f"{r['baseline_itl_p50_ms']:.2f}" if r.get("baseline_itl_p50_ms") is not None else "N/A"
+        if r.get("itl_p50_ms") is not None and r.get("baseline_itl_p50_ms"):
+            itl_delta = (r["itl_p50_ms"] / r["baseline_itl_p50_ms"] - 1) * 100
+            itl_str = f"{itl} <span class='delta'>({itl_delta:+.1f}%)</span>"
         else:
-            tpot_str = tpot
+            itl_str = itl
 
         tput = f"{r['tok_per_sec_per_gpu']:.2f}" if r.get("tok_per_sec_per_gpu") is not None else "N/A"
         base_tput = f"{r['baseline_tok_per_sec_per_gpu']:.2f}" if r.get("baseline_tok_per_sec_per_gpu") is not None else "N/A"
@@ -392,7 +397,7 @@ def render_regression_section(report: dict) -> str:
         rows.append(f"""<tr>
           <td>{escape(r.get('config', '?'))}</td>
           <td>{badge}</td>
-          <td>{tpot_str}</td><td>{base_tpot}</td>
+          <td>{itl_str}</td><td>{base_itl}</td>
           <td>{tput_str}</td><td>{base_tput}</td>
           <td class="msg">{escape(msgs)}</td>
         </tr>""")
@@ -453,14 +458,14 @@ def render_gsm8k_section(gsm8k: list) -> str:
 
 def render_trend_section(history: list[dict]) -> str:
     tput_svg = render_trend_svg(history, "tok_per_sec_per_gpu", "tok/sec/GPU (7-day trend)")
-    tpot_svg = render_trend_svg(history, "tpot_p50_ms", "ITL p50 ms (7-day trend)")
+    itl_svg = render_trend_svg(history, "itl_p50_ms", "ITL p50 ms (7-day trend)")
 
     return f"""
     <section>
       <h2>7-Day Trend</h2>
       <div class="trends">
         <div>{tput_svg}</div>
-        <div>{tpot_svg}</div>
+        <div>{itl_svg}</div>
       </div>
     </section>"""
 
