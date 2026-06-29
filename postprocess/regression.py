@@ -19,7 +19,7 @@ import json
 import sys
 from pathlib import Path
 
-TPOT_REGRESSION_THRESHOLD = 0.10
+ITL_REGRESSION_THRESHOLD = 0.10
 THROUGHPUT_REGRESSION_THRESHOLD = 0.05
 GSM8K_ABSOLUTE_THRESHOLD = 0.95
 GSM8K_DELTA_THRESHOLD = 0.02
@@ -142,13 +142,13 @@ def check_perf_regression(
         messages = []
         status = "pass"
 
-        if base.get("tpot_p50_ms", 0) > 0:
-            tpot_ratio = peak["tpot_p50_ms"] / base["tpot_p50_ms"]
-            if tpot_ratio > 1 + TPOT_REGRESSION_THRESHOLD:
+        if base.get("itl_p50_ms", 0) > 0:
+            itl_ratio = peak["itl_p50_ms"] / base["itl_p50_ms"]
+            if itl_ratio > 1 + ITL_REGRESSION_THRESHOLD:
                 status = "warn"
                 messages.append(
-                    f"TPOT p50 regressed {(tpot_ratio - 1) * 100:.1f}% "
-                    f"({base['tpot_p50_ms']:.1f}ms -> {peak['tpot_p50_ms']:.1f}ms)"
+                    f"ITL p50 regressed {(itl_ratio - 1) * 100:.1f}% "
+                    f"({base['itl_p50_ms']:.1f}ms -> {peak['itl_p50_ms']:.1f}ms)"
                 )
 
         if base.get("tok_per_sec_per_gpu", 0) > 0:
@@ -163,10 +163,10 @@ def check_perf_regression(
         results.append({
             "config": config,
             "status": status,
-            "tpot_p50_ms": peak["tpot_p50_ms"],
+            "itl_p50_ms": peak["itl_p50_ms"],
             "tok_per_sec_per_gpu": peak["tok_per_sec_per_gpu"],
             "concurrency": peak["concurrency"],
-            "baseline_tpot_p50_ms": base.get("tpot_p50_ms"),
+            "baseline_itl_p50_ms": base.get("itl_p50_ms"),
             "baseline_tok_per_sec_per_gpu": base.get("tok_per_sec_per_gpu"),
             "messages": messages,
         })
@@ -191,7 +191,7 @@ def update_baseline(run_dir: Path, points: list[dict]):
             peak = max(cfg_points, key=lambda p: p["concurrency"])
             current[config] = {
                 "config": config,
-                "tpot_p50_ms": peak["tpot_p50_ms"],
+                "itl_p50_ms": peak["itl_p50_ms"],
                 "tok_per_sec_per_gpu": peak["tok_per_sec_per_gpu"],
                 "concurrency": peak["concurrency"],
                 "date": run_dir.name,
@@ -212,20 +212,20 @@ def update_baseline(run_dir: Path, points: list[dict]):
 
     baseline["configs"] = []
     for config in sorted(all_configs):
-        tpot_values = []
+        itl_values = []
         tput_values = []
         for entry in baseline["history"]:
             c = entry.get("configs", {}).get(config)
             if c:
-                tpot_values.append(c["tpot_p50_ms"])
+                itl_values.append(c["itl_p50_ms"])
                 tput_values.append(c["tok_per_sec_per_gpu"])
 
-        if tpot_values:
+        if itl_values:
             baseline["configs"].append({
                 "config": config,
-                "tpot_p50_ms": round(median(tpot_values), 2),
+                "itl_p50_ms": round(median(itl_values), 2),
                 "tok_per_sec_per_gpu": round(median(tput_values), 2),
-                "n_samples": len(tpot_values),
+                "n_samples": len(itl_values),
             })
 
     with open(baseline_path, "w") as f:

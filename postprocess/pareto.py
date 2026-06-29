@@ -77,7 +77,7 @@ def load_stages(summary_path: Path) -> list[dict]:
 
 
 def compute_pareto_points(run_dir: Path) -> list[dict]:
-    """Compute (tpot, tok/sec/gpu) for each config x stage."""
+    """Compute (itl, tok/sec/gpu) for each config x stage."""
     meta_path = run_dir / "metadata.json"
     if not meta_path.exists():
         print(f"ERROR: {meta_path} not found", file=sys.stderr)
@@ -127,7 +127,7 @@ def compute_pareto_points(run_dir: Path) -> list[dict]:
 
 def pareto_frontier(points: list[dict]) -> list[dict]:
     """Extract the Pareto-optimal points (minimize TPOT, maximize tok/sec/GPU)."""
-    sorted_pts = sorted(points, key=lambda p: p["tpot_p50_ms"])
+    sorted_pts = sorted(points, key=lambda p: p["itl_p50_ms"])
     frontier = []
     max_efficiency = -1
     for pt in sorted_pts:
@@ -165,19 +165,19 @@ def plot_pareto(points: list[dict], frontier: list[dict], path: Path):
 
     for config in configs:
         cfg_points = [p for p in points if p["config"] == config]
-        x = [p["tpot_p50_ms"] for p in cfg_points]
+        x = [p["itl_p50_ms"] for p in cfg_points]
         y = [p["tok_per_sec_per_gpu"] for p in cfg_points]
         ax.scatter(x, y, color=config_colors[config], label=config, s=80, zorder=3)
 
         sorted_cfg = sorted(cfg_points, key=lambda p: p["concurrency"])
-        x_line = [p["tpot_p50_ms"] for p in sorted_cfg]
+        x_line = [p["itl_p50_ms"] for p in sorted_cfg]
         y_line = [p["tok_per_sec_per_gpu"] for p in sorted_cfg]
         ax.plot(x_line, y_line, color=config_colors[config], alpha=0.3, linewidth=1)
 
         for p in cfg_points:
             ax.annotate(
                 str(p["concurrency"]),
-                (p["tpot_p50_ms"], p["tok_per_sec_per_gpu"]),
+                (p["itl_p50_ms"], p["tok_per_sec_per_gpu"]),
                 textcoords="offset points",
                 xytext=(5, 5),
                 fontsize=7,
@@ -185,11 +185,11 @@ def plot_pareto(points: list[dict], frontier: list[dict], path: Path):
             )
 
     if frontier:
-        fx = [p["tpot_p50_ms"] for p in frontier]
+        fx = [p["itl_p50_ms"] for p in frontier]
         fy = [p["tok_per_sec_per_gpu"] for p in frontier]
         ax.plot(fx, fy, "k--", linewidth=2, alpha=0.5, label="Pareto frontier")
 
-    ax.set_xlabel("TPOT p50 (ms)", fontsize=12)
+    ax.set_xlabel("ITL p50 (ms)", fontsize=12)
     ax.set_ylabel("tok/sec/GPU", fontsize=12)
     ax.set_title("Nightly Efficiency Pareto Frontier", fontsize=14)
     ax.legend(loc="best")
