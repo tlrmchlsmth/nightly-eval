@@ -157,11 +157,8 @@ def render_trend_svg(history: list[dict], metric: str, label: str) -> str:
         for cfg in entry.get("configs", {}).values():
             if not isinstance(cfg, dict):
                 continue
-            v = cfg.get(metric)
-            if v is None and metric == "itl_p50_ms":
-                v = cfg.get("tpot_p50_ms")
-            if v is not None:
-                vals.append(v)
+            if metric in cfg:
+                vals.append(cfg[metric])
         if vals:
             data.append((entry.get("date", "?"), sum(vals) / len(vals)))
 

@@ -142,14 +142,13 @@ def check_perf_regression(
         messages = []
         status = "pass"
 
-        base_itl = base.get("itl_p50_ms") or base.get("tpot_p50_ms", 0)
-        if base_itl > 0:
-            itl_ratio = peak["itl_p50_ms"] / base_itl
+        if base.get("itl_p50_ms", 0) > 0:
+            itl_ratio = peak["itl_p50_ms"] / base["itl_p50_ms"]
             if itl_ratio > 1 + ITL_REGRESSION_THRESHOLD:
                 status = "warn"
                 messages.append(
                     f"ITL p50 regressed {(itl_ratio - 1) * 100:.1f}% "
-                    f"({base_itl:.1f}ms -> {peak['itl_p50_ms']:.1f}ms)"
+                    f"({base['itl_p50_ms']:.1f}ms -> {peak['itl_p50_ms']:.1f}ms)"
                 )
 
         if base.get("tok_per_sec_per_gpu", 0) > 0:
@@ -167,7 +166,7 @@ def check_perf_regression(
             "itl_p50_ms": peak["itl_p50_ms"],
             "tok_per_sec_per_gpu": peak["tok_per_sec_per_gpu"],
             "concurrency": peak["concurrency"],
-            "baseline_itl_p50_ms": base.get("itl_p50_ms") or base.get("tpot_p50_ms"),
+            "baseline_itl_p50_ms": base.get("itl_p50_ms"),
             "baseline_tok_per_sec_per_gpu": base.get("tok_per_sec_per_gpu"),
             "messages": messages,
         })
@@ -218,10 +217,8 @@ def update_baseline(run_dir: Path, points: list[dict]):
         for entry in baseline["history"]:
             c = entry.get("configs", {}).get(config)
             if c:
-                itl = c.get("itl_p50_ms") or c.get("tpot_p50_ms")
-                if itl is not None:
-                    itl_values.append(itl)
-                    tput_values.append(c["tok_per_sec_per_gpu"])
+                itl_values.append(c["itl_p50_ms"])
+                tput_values.append(c["tok_per_sec_per_gpu"])
 
         if itl_values:
             baseline["configs"].append({
