@@ -61,11 +61,16 @@ def load_csv_rows(path: Path) -> list[dict]:
 # SVG chart renderers
 # ---------------------------------------------------------------------------
 
+def _tpot(p: dict) -> float:
+    """TPOT/user in ms, falling back to older latency columns if needed."""
+    return p.get("tpot_ms") or p.get("tpot_p50_ms") or p.get("itl_mean_ms") or p.get("itl_p50_ms", 0)
+
+
 def _interactivity(p: dict) -> float:
-    """tok/sec/user derived from mean ITL. Falls back to p50 if mean missing."""
-    itl = p.get("itl_mean_ms") or p.get("itl_p50_ms", 0)
-    if itl > 0:
-        return 1000.0 / itl
+    """tok/sec/user derived from TPOT/user."""
+    tpot = _tpot(p)
+    if tpot > 0:
+        return 1000.0 / tpot
     return p.get("interactivity", 0)
 
 
@@ -83,12 +88,12 @@ def render_pareto_plotly(points: list[dict], frontier: list[dict]) -> str:
             key=lambda p: p["concurrency"],
         )
         traces.append({
-            "x": [_interactivity(p) for p in cfg_pts],
+            "x": [_tpot(p) for p in cfg_pts],
             "y": [p["tok_per_sec_per_gpu"] for p in cfg_pts],
             "text": [f"c={int(p['concurrency'])}" for p in cfg_pts],
             "customdata": [
-                [p.get("itl_mean_ms") or p.get("itl_p50_ms", 0),
-                 p.get("itl_p95_ms") or p.get("itl_p95_ms", 0),
+                [_interactivity(p),
+                 p.get("stream_itl_mean_ms") or p.get("itl_mean_ms", 0),
                  p.get("ttft_p50_ms", 0),
                  p.get("tok_per_sec", 0),
                  int(p.get("concurrency", 0))]
@@ -102,11 +107,11 @@ def render_pareto_plotly(points: list[dict], frontier: list[dict]) -> str:
             "line": {"color": color_map[config], "width": 1.5, "dash": "dot"},
             "hovertemplate": (
                 "<b>%{fullData.name}</b><br>"
-                "Interactivity: %{x:.2f} tok/s/user<br>"
+                "TPOT/user: %{x:.2f} ms<br>"
                 "Throughput: %{y:.2f} tok/s/GPU<br>"
                 "Concurrency: %{customdata[4]}<br>"
-                "ITL mean: %{customdata[0]:.2f} ms<br>"
-                "ITL p95: %{customdata[1]:.2f} ms<br>"
+                "Interactivity: %{customdata[0]:.2f} tok/s/user<br>"
+                "Raw stream ITL mean: %{customdata[1]:.2f} ms<br>"
                 "TTFT p50: %{customdata[2]:.2f} ms<br>"
                 "Total tok/sec: %{customdata[3]:.0f}"
                 "<extra></extra>"
@@ -114,9 +119,9 @@ def render_pareto_plotly(points: list[dict], frontier: list[dict]) -> str:
         })
 
     if frontier:
-        sorted_f = sorted(frontier, key=lambda p: _interactivity(p))
+        sorted_f = sorted(frontier, key=lambda p: _tpot(p))
         traces.append({
-            "x": [_interactivity(p) for p in sorted_f],
+            "x": [_tpot(p) for p in sorted_f],
             "y": [p["tok_per_sec_per_gpu"] for p in sorted_f],
             "name": "Pareto frontier",
             "mode": "lines",
@@ -127,7 +132,7 @@ def render_pareto_plotly(points: list[dict], frontier: list[dict]) -> str:
 
     layout = {
         "title": {"text": "Efficiency Pareto Frontier", "font": {"size": 15, "color": "#241f31"}},
-        "xaxis": {"title": "Interactivity (tok/sec/user)", "gridcolor": "#deddda"},
+        "xaxis": {"title": "TPOT/user (ms)", "gridcolor": "#deddda"},
         "yaxis": {"title": "Throughput (tok/sec/GPU)", "gridcolor": "#deddda"},
         "plot_bgcolor": "#fafafa",
         "paper_bgcolor": "rgba(0,0,0,0)",
@@ -326,8 +331,9 @@ def render_pareto_section(points: list[dict], frontier: list[dict]) -> str:
 
     # Collapsible data table
     if points:
-        cols = ["config", "concurrency", "interactivity", "itl_mean_ms",
-                "itl_p95_ms", "ttft_p50_ms", "tok_per_sec", "tok_per_sec_per_gpu"]
+        cols = ["config", "concurrency", "tpot_ms", "interactivity",
+                "stream_itl_mean_ms", "ttft_p50_ms", "tok_per_sec",
+                "tok_per_sec_per_gpu"]
         header = "".join(f"<th>{escape(c)}</th>" for c in cols)
         rows = []
         for p in sorted(points, key=lambda p: (p["config"], p.get("concurrency", 0))):
@@ -373,13 +379,13 @@ def render_regression_section(report: dict) -> str:
         color = STATUS_COLORS.get(status, "#6b7280")
         badge = f'<span class="status-sm" style="background:{color};">{escape(status).upper()}</span>'
 
-        itl = f"{r['itl_p50_ms']:.2f}" if r.get("itl_p50_ms") is not None else "N/A"
-        base_itl = f"{r['baseline_itl_p50_ms']:.2f}" if r.get("baseline_itl_p50_ms") is not None else "N/A"
-        if r.get("itl_p50_ms") is not None and r.get("baseline_itl_p50_ms"):
-            itl_delta = (r["itl_p50_ms"] / r["baseline_itl_p50_ms"] - 1) * 100
-            itl_str = f"{itl} <span class='delta'>({itl_delta:+.1f}%)</span>"
+        tpot = f"{r['tpot_ms']:.2f}" if r.get("tpot_ms") is not None else "N/A"
+        base_tpot = f"{r['baseline_tpot_ms']:.2f}" if r.get("baseline_tpot_ms") is not None else "N/A"
+        if r.get("tpot_ms") is not None and r.get("baseline_tpot_ms"):
+            tpot_delta = (r["tpot_ms"] / r["baseline_tpot_ms"] - 1) * 100
+            tpot_str = f"{tpot} <span class='delta'>({tpot_delta:+.1f}%)</span>"
         else:
-            itl_str = itl
+            tpot_str = tpot
 
         tput = f"{r['tok_per_sec_per_gpu']:.2f}" if r.get("tok_per_sec_per_gpu") is not None else "N/A"
         base_tput = f"{r['baseline_tok_per_sec_per_gpu']:.2f}" if r.get("baseline_tok_per_sec_per_gpu") is not None else "N/A"
@@ -394,7 +400,7 @@ def render_regression_section(report: dict) -> str:
         rows.append(f"""<tr>
           <td>{escape(r.get('config', '?'))}</td>
           <td>{badge}</td>
-          <td>{itl_str}</td><td>{base_itl}</td>
+          <td>{tpot_str}</td><td>{base_tpot}</td>
           <td>{tput_str}</td><td>{base_tput}</td>
           <td class="msg">{escape(msgs)}</td>
         </tr>""")
@@ -405,7 +411,7 @@ def render_regression_section(report: dict) -> str:
       <table>
         <thead><tr>
           <th>Config</th><th>Status</th>
-          <th>ITL p50 (ms)</th><th>Baseline</th>
+          <th>TPOT/user (ms)</th><th>Baseline</th>
           <th>tok/sec/GPU</th><th>Baseline</th>
           <th>Messages</th>
         </tr></thead>
@@ -455,14 +461,14 @@ def render_gsm8k_section(gsm8k: list) -> str:
 
 def render_trend_section(history: list[dict]) -> str:
     tput_svg = render_trend_svg(history, "tok_per_sec_per_gpu", "tok/sec/GPU (7-day trend)")
-    itl_svg = render_trend_svg(history, "itl_p50_ms", "ITL p50 ms (7-day trend)")
+    tpot_svg = render_trend_svg(history, "tpot_ms", "TPOT/user ms (7-day trend)")
 
     return f"""
     <section>
       <h2>7-Day Trend</h2>
       <div class="trends">
         <div>{tput_svg}</div>
-        <div>{itl_svg}</div>
+        <div>{tpot_svg}</div>
       </div>
     </section>"""
 
