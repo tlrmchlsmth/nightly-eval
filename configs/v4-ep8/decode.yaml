@@ -27,8 +27,6 @@ spec:
       spec:
         serviceAccountName: nightly-deepseek-v4
         terminationGracePeriodSeconds: 0
-        nodeSelector:
-          oci.oraclecloud.com/rack-name: oci-bth-aiaccelerator-prd005-hpc-rack-1
         volumes:
           - name: dshm
             emptyDir:
