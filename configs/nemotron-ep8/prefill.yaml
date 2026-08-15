@@ -1,0 +1,185 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: nightly-wide-ep-prefill
+  labels:
+    kueue.x-k8s.io/queue-name: nightly-eval
+    llm-d.ai/inference-serving: "true"
+    llm-d.ai/model: NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+    llm-d.ai/role: prefill
+    llm-d.ai/deployment: pd
+spec:
+  replicas: 1
+  rolloutStrategy:
+    type: RollingUpdate
+    rollingUpdateConfiguration:
+      maxUnavailable: 100%
+  leaderWorkerTemplate:
+    size: 1
+    workerTemplate:
+      metadata:
+        labels:
+          llm-d.ai/inference-serving: "true"
+          llm-d.ai/model: NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4
+          llm-d.ai/role: prefill
+          llm-d.ai/deployment: pd
+          llm-d.ai/owner: nightly
+      spec:
+        serviceAccountName: nightly-nemotron
+        terminationGracePeriodSeconds: 0
+        nodeSelector:
+          oci.oraclecloud.com/rack-name: oci-bth-aiaccelerator-prd005-hpc-rack-1
+        volumes:
+          - name: dshm
+            emptyDir:
+              medium: Memory
+              sizeLimit: 2Gi
+          - name: lustre
+            persistentVolumeClaim:
+              claimName: lustre-pvc-vllm
+          - name: local-nvme
+            hostPath:
+              path: /mnt/numa0
+              type: Directory
+        resourceClaims:
+          - name: compute-domain-channel
+            resourceClaimTemplateName: llm-d-dev-claim
+        containers:
+          - name: vllm
+            image: VLLM_IMAGE_PLACEHOLDER
+            securityContext:
+              capabilities:
+                add:
+                  - IPC_LOCK
+                  - SYS_RAWIO
+              runAsGroup: 0
+              runAsUser: 0
+            imagePullPolicy: Always
+            command:
+              - /bin/bash
+              - -c
+            args:
+              - |-
+                set -euo pipefail
+                LOG_DIR=/mnt/lustre/nightly/logs/nemotron-prefill
+                mkdir -p "$LOG_DIR"
+                LOG_FILE="$LOG_DIR/${HOSTNAME}_$(date +%Y%m%d-%H%M%S).log"
+                exec > >(tee -a "$LOG_FILE") 2>&1
+                echo "=== Pod $HOSTNAME started at $(date -Iseconds) ==="
+
+                START_RANK=$(( ${LWS_WORKER_INDEX:-0} * 4 ))
+
+                exec vllm serve \
+                  nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-NVFP4 \
+                  --port 8000 \
+                  --disable-uvicorn-access-log \
+                  --tensor-parallel-size 1 \
+                  --enable-expert-parallel \
+                  --data-parallel-size $((LWS_GROUP_SIZE * 4)) \
+                  --data-parallel-size-local 4 \
+                  --data-parallel-hybrid-lb \
+                  --data-parallel-start-rank $START_RANK \
+                  --data-parallel-address ${LWS_LEADER_ADDRESS} \
+                  --data-parallel-rpc-port 5555 \
+                  --trust-remote-code \
+                  --kv_transfer_config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_buffer_device":"cuda","kv_load_failure_policy":"fail"}' \
+                  --gpu-memory-utilization 0.90 \
+                  --max-num-seqs 256 \
+                  --mamba-backend flashinfer \
+                  --mamba-ssm-cache-dtype float16 \
+                  --enable-flashinfer-autotune \
+                  --all2all-backend "flashinfer_nvlink_one_sided" \
+                  --kv-cache-dtype fp8 \
+                  --enable-force-include-usage \
+                  --reasoning-parser nemotron_v3
+            env:
+              - name: VLLM_USE_V2_MODEL_RUNNER
+                value: "0"
+              - name: VLLM_HTTP_TIMEOUT_KEEP_ALIVE
+                value: "120"
+              - name: VLLM_NO_USAGE_STATS
+                value: "1"
+              - name: TQDM_DISABLE
+                value: "1"
+              - name: VLLM_USE_FLASHINFER_MOE_FP4
+                value: "1"
+              - name: VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
+                value: "1"
+              # Mamba conv state dim-first layout, required by NIXL for KV transfer
+              - name: VLLM_SSM_CONV_STATE_LAYOUT
+                value: "DS"
+              - name: HF_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: hf-secret
+                    key: HF_TOKEN
+                    optional: true
+              - name: HF_HOME
+                value: /mnt/local/hf_cache
+              - name: VLLM_CACHE_ROOT
+                value: /mnt/lustre/nightly/vllm_cache_nemotron
+              - name: FLASHINFER_CACHE_DIR
+                value: /mnt/lustre/nightly/flashinfer_cache_nemotron
+              - name: TRITON_LIBCUDA_PATH
+                value: /usr/lib64
+              - name: VLLM_RANDOMIZE_DP_DUMMY_INPUTS
+                value: "1"
+              - name: VLLM_USE_DEEP_GEMM
+                value: "1"
+              - name: NVIDIA_GDRCOPY
+                value: enabled
+              - name: UCX_NET_DEVICES
+                value: "mlx5_0:1,mlx5_1:1,mlx5_3:1,mlx5_4:1"
+              - name: VLLM_NIXL_SIDE_CHANNEL_HOST
+                valueFrom:
+                  fieldRef:
+                    fieldPath: status.podIP
+              - name: VLLM_ENGINE_READY_TIMEOUT_S
+                value: "1800"
+              - name: VLLM_LOGGING_LEVEL
+                value: INFO
+            ports:
+              - containerPort: 8000
+                name: modelserver
+                protocol: TCP
+            startupProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              initialDelaySeconds: 0
+              periodSeconds: 1
+              timeoutSeconds: 5
+              failureThreshold: 2700
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 8000
+              periodSeconds: 30
+              timeoutSeconds: 5
+              failureThreshold: 3
+            readinessProbe:
+              httpGet:
+                path: /v1/models
+                port: 8000
+              periodSeconds: 10
+              timeoutSeconds: 5
+              failureThreshold: 3
+            resources:
+              claims:
+                - name: compute-domain-channel
+              limits:
+                ephemeral-storage: 128Gi
+                memory: 512Gi
+                nvidia.com/gpu: "4"
+              requests:
+                cpu: 32
+                ephemeral-storage: 128Gi
+                memory: 512Gi
+                nvidia.com/gpu: "4"
+            volumeMounts:
+              - mountPath: /dev/shm
+                name: dshm
+              - mountPath: /mnt/lustre
+                name: lustre
+              - mountPath: /mnt/local
+                name: local-nvme

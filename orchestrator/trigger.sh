@@ -30,7 +30,7 @@ kubectl -n "$NAMESPACE" create job "$JOB_NAME" \
   | jq --arg branch "$BRANCH" --arg image "$VLLM_IMAGE" \
     '(.spec.template.spec.initContainers[0].args[0]) =
       "git clone --depth=1 -b " + $branch +
-      " https://github.com/tlrmchlsmth/nightly-eval.git /workspace/nightly-eval"
+      " https://github.com/elvircrn/nightly-eval.git /workspace/nightly-eval"
     | (.spec.template.spec.containers[0].env[] | select(.name == "VLLM_IMAGE") | .value) = $image' \
   | kubectl -n "$NAMESPACE" apply -f -
 

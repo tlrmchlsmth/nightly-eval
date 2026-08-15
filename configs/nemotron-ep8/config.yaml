@@ -1,0 +1,4 @@
+name: nemotron-ep8
+description: "EP8 decode (2 pods x 4 GPUs), P/D disaggregated, Nemotron-Ultra-550B-NVFP4"
+evals:
+  - lm_eval
